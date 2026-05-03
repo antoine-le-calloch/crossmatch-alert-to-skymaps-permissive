@@ -1,0 +1,14 @@
+astropy
+mocpy
+requests
+python-dotenv
+numpy
+slack_sdk
+astropy_healpix
+confluent_kafka
+fastavro
+cramjam
+gcn_kafka
+jsonschema
+referencing
+matplotlib
