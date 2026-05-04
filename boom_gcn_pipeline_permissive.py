@@ -263,9 +263,10 @@ if __name__ == "__main__":
             slack_notifier.delete_all_bot_messages()
 
     gcn_notifier = None
-    if NOTIFY_GCN:
-        from gcn.produce_gcn_notices import GcnProducer
-        gcn_notifier = GcnProducer()
+    log(f"{YELLOW}GCN notifier is disabled in this repo: private ZTF alerts must not be republished to public GCN streams.{ENDC}")
+    # if NOTIFY_GCN:
+    #     from gcn.produce_gcn_notices import GcnProducer
+    #     gcn_notifier = GcnProducer()
 
     if not gcn_notifier and not slack_notifier:
         raise SystemExit(f"{RED}No notifier enabled. Please enable at least one of GCN or Slack notifications.{ENDC}")

@@ -6,6 +6,8 @@
     Boom Gcn Pipeline
 </h1>
 
+> ⚠️ **Warning:** This repository processes and republishes **private alerts**. Make sure you have the appropriate authorization before running it or sharing any of the output. For the official, less permissive version that only processes and republishes **public data**, see [antoine-le-calloch/crossmatch-alert-to-skymaps](https://github.com/antoine-le-calloch/crossmatch-alert-to-skymaps).
+
 A Python service that consumes alerts from the [BOOM/Babamul](https://babamul.caltech.edu/) broker, crossmatches them with recent GCN skymaps from [SkyPortal](https://skyportal.io/), and republishes the matches as [BOOM GCN Notices](https://gcn.nasa.gov/notices).
 
 ## About BOOM
@@ -17,7 +19,7 @@ This service contributes to the BOOM GCN Notices stream: it crossmatches candida
 ## What it does
 
 - Polls SkyPortal for recent GCN events with a `< 1000 sq. deg.` localization and builds MOCs from their skymaps.
-- Consumes alerts from configured BOOM Kafka filters, filters photometry (public, SNR, detections / last non-detection), and checks spatial and temporal containment against each skymap.
+- Consumes alerts from configured BOOM Kafka filters, filters photometry (SNR, detections / last non-detection), and checks spatial and temporal containment against each skymap.
 - For every match, produces a BOOM GCN Notice to GCN Kafka (test or production). A Slack summary with the payload JSON and a PNG of the object over each matching skymap MOC can optionally be sent.
 - Emits periodic heartbeats on the `gcn.notices.boom.heartbeat` topic.
 
@@ -59,7 +61,7 @@ The BOOM GCN schema and example JSON messages are available in the [GCN Schema p
 
 ## Running the Service
 ```bash
-python boom_gcn_pipeline.py
+python boom_gcn_pipeline_permissive.py
 ```
 
 CLI options:
