@@ -20,8 +20,8 @@ BOOM_FILTERS = os.getenv("BOOM_KAFKA_FILTERS").split(",")
 NOTIFY_GCN = str_to_bool(os.getenv("NOTIFY_GCN"), default=False)
 NOTIFY_SLACK = str_to_bool(os.getenv("NOTIFY_SLACK"), default=False)
 
-GCN = 24*6  # hours for GCN fallback
-FIRST_DETECTION = 24*5  # hours for first detection fallback
+GCN = 24*8  # hours for GCN fallback
+FIRST_DETECTION = 24*7  # hours for first detection fallback
 SLEEP_TIME = 20 # seconds between each loop
 HEARTBEAT_INTERVAL = 120 # seconds between each heartbeat log
 
@@ -52,10 +52,8 @@ def get_filtered_photometry(alert, snr_threshold, first_detection_fallback):
     last_non_detection = []
     filtered_photometry = []
     for phot in reversed(alert.get("photometry", [])):  # From the most recent to the oldest
-        if phot["programid"] != 1:
-            continue
-        if not phot["flux_err"] or (phot["flux"] and phot["flux"] < 0):
-            continue # Skip points with missing flux_err or negative flux
+        if phot["origin"] == "ForcedPhot" or not phot["flux_err"] or (phot["flux"] and phot["flux"] < 0):
+            continue # Skip forced photometry, no flux_err and negative fluxes
 
         if phot["flux"] and phot["flux"] / phot["flux_err"] >= snr_threshold:  # Detection
             if phot["jd"] < first_detection_fallback:
@@ -80,7 +78,7 @@ def get_filtered_photometry(alert, snr_threshold, first_detection_fallback):
 def boom_gcn_pipeline(gcn=None, slack=None):
     skyportal = SkyPortal(instance=SKYPORTAL_URL, token=SKYPORTAL_API_KEY)
     cumulative_probability = 0.95
-    snr_threshold = 5.0
+    snr_threshold = 3.0
     published_matches = {}  # {objectId: {"skymaps": set((dateobs,created_at)), "first_detection_jd": float}}
     skymaps = {} # {dateobs: Skymap}
 
