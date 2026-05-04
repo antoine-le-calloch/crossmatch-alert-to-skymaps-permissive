@@ -29,14 +29,18 @@ HEARTBEAT_INTERVAL = 120 # seconds between each heartbeat log
 def get_filtered_photometry(alert, snr_threshold, first_detection_fallback):
     """
     Filter the photometry of an alert to keep only the last non-detection and all detections,
-    while also checking if the object is too old based on the SNR threshold and the first detection fallback.
+    while also checking if the object is too old based on the first detection fallback.
+
+    A detection is any photometry point (including forced photometry) with SNR >= snr_threshold.
+    Points with missing flux_err or negative flux are skipped entirely; points below the SNR
+    threshold are treated as non-detection.
 
     Parameters
     ----------
     alert : dict
         The alert containing photometry data.
     snr_threshold : float
-        The SNR threshold to consider an object as too old.
+        The SNR threshold above which a photometry point is considered a detection.
     first_detection_fallback : float
         The Julian Date fallback for the first detection
     Returns
@@ -50,15 +54,15 @@ def get_filtered_photometry(alert, snr_threshold, first_detection_fallback):
     for phot in reversed(alert.get("photometry", [])):  # From the most recent to the oldest
         if phot["programid"] != 1:
             continue
-        if phot["origin"] == "ForcedPhot" or not phot["flux_err"] or (phot["flux"] and phot["flux"] < 0):
-            continue # Skip forced photometry, no flux_err and negative fluxes
+        if not phot["flux_err"] or (phot["flux"] and phot["flux"] < 0):
+            continue # Skip points with missing flux_err or negative flux
 
-        if phot["flux"]:  # If it's a detection
+        if phot["flux"] and phot["flux"] / phot["flux_err"] >= snr_threshold:  # Detection
+            if phot["jd"] < first_detection_fallback:
+                # A detection older than first_detection_fallback means the object is too old, skip it
+                return None
             last_non_detection = []  # Reset last non-detection as we found a detection
             filtered_photometry.append(phot)
-            if phot["flux"] / phot["flux_err"] >= snr_threshold and phot["jd"] < first_detection_fallback:
-                # If at least one detection with SNR >= snr_threshold is older than first_detection_fallback, consider the object as too old and skip it
-                return None
         elif not last_non_detection:
             last_non_detection = [phot]
 
