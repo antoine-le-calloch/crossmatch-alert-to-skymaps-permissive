@@ -1,5 +1,6 @@
 astropy
 mocpy
+cdshealpix
 requests
 python-dotenv
 numpy
