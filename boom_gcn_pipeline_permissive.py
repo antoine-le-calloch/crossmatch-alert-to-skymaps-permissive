@@ -104,48 +104,49 @@ def boom_gcn_pipeline(gcn=None, slack=None):
                 check_for_gcn_events_timer = time.time() # reset timer
 
                 # Check if SkyPortal is available
-                skyportal.ping()
+                if not skyportal.ping():
+                    log(f"{YELLOW}SkyPortal API is not available, keeping the skymaps already fetched{ENDC}")
+                else:
+                    # Check for new GCN events or new localizations for existing events with "< 1000 sq. deg." tag
+                    new_gcn_events = []
+                    for event in skyportal.get_gcn_events(fallback(GCN)):
+                        if not any("#" in alias for alias in event.get("aliases") or []):
+                            if event["dateobs"] not in skipped_events:
+                                skipped_events.add(event["dateobs"])
+                                log(f"Skipping GCN event {event['dateobs']} due to bad aliases: {event.get('aliases')}")
+                            continue # Filter out GCN events with bad or no aliases
 
-                # Check for new GCN events or new localizations for existing events with "< 1000 sq. deg." tag
-                new_gcn_events = []
-                for event in skyportal.get_gcn_events(fallback(GCN)):
-                    if not any("#" in alias for alias in event.get("aliases") or []):
-                        if event["dateobs"] not in skipped_events:
-                            skipped_events.add(event["dateobs"])
-                            log(f"Skipping GCN event {event['dateobs']} due to bad aliases: {event.get('aliases')}")
-                        continue # Filter out GCN events with bad or no aliases
+                        event["localization"] = next(
+                            (loc for loc in event.get("localizations", [])
+                             if any(tag["text"] == "< 1000 sq. deg." for tag in loc.get("tags", []))),
+                            None
+                        )
+                        if event["localization"] is None:
+                            continue
+                        elif event["dateobs"] not in skymaps:
+                            new_gcn_events.append(event)
+                        elif skymaps[event["dateobs"]].created_at < event["localization"]["created_at"]:
+                            # If the localization is newer than the one we have for that dateobs, we should recompute this event
+                            new_gcn_events.append(event)
 
-                    event["localization"] = next(
-                        (loc for loc in event.get("localizations", [])
-                         if any(tag["text"] == "< 1000 sq. deg." for tag in loc.get("tags", []))),
-                        None
-                    )
-                    if event["localization"] is None:
-                        continue
-                    elif event["dateobs"] not in skymaps:
-                        new_gcn_events.append(event)
-                    elif skymaps[event["dateobs"]].created_at < event["localization"]["created_at"]:
-                        # If the localization is newer than the one we have for that dateobs, we should recompute this event
-                        new_gcn_events.append(event)
+                    for gcn_event in new_gcn_events:
+                        skymaps[gcn_event["dateobs"]] = get_skymap(skyportal, cumulative_probability, gcn_event)
+                    if new_gcn_events:
+                        log(f"Fetched {len(new_gcn_events)} skymaps and created MOCs")
 
-                for gcn_event in new_gcn_events:
-                    skymaps[gcn_event["dateobs"]] = get_skymap(skyportal, cumulative_probability, gcn_event)
-                if new_gcn_events:
-                    log(f"Fetched {len(new_gcn_events)} skymaps and created MOCs")
+                    # Clean up old skymaps (GCN events older than fallback)
+                    gcn_fallback_iso = fallback(GCN, date_format="iso")[:19]
+                    skipped_events = {d for d in skipped_events if d >= gcn_fallback_iso}
+                    for dateobs in list(skymaps.keys()):
+                        if dateobs < gcn_fallback_iso:
+                            log(f"Removed expired skymap {dateobs} from skymaps")
+                            del skymaps[dateobs]
 
-                # Clean up old skymaps (GCN events older than fallback)
-                gcn_fallback_iso = fallback(GCN, date_format="iso")[:19]
-                skipped_events = {d for d in skipped_events if d >= gcn_fallback_iso}
-                for dateobs in list(skymaps.keys()):
-                    if dateobs < gcn_fallback_iso:
-                        log(f"Removed expired skymap {dateobs} from skymaps")
-                        del skymaps[dateobs]
-
-                first_detection_fallback_jd = fallback(FIRST_DETECTION, date_format="jd")
-                for obj_id, info in list(published_matches.items()):
-                    if info["first_detection_jd"] < first_detection_fallback_jd:
-                        log(f"Removed expired object {obj_id} from published_matches")
-                        del published_matches[obj_id]
+                    first_detection_fallback_jd = fallback(FIRST_DETECTION, date_format="jd")
+                    for obj_id, info in list(published_matches.items()):
+                        if info["first_detection_jd"] < first_detection_fallback_jd:
+                            log(f"Removed expired object {obj_id} from published_matches")
+                            del published_matches[obj_id]
 
             # Consume new alerts passing a set of filters from Boom Kafka and crossmatch them with available skymaps
             msg = consumer.poll(timeout=30.0)
