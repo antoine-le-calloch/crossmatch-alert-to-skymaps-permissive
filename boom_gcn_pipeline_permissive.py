@@ -81,6 +81,7 @@ def boom_gcn_pipeline(gcn=None, slack=None):
     snr_threshold = 3.0
     published_matches = {}  # {objectId: {"skymaps": set((dateobs,created_at)), "first_detection_jd": float}}
     skymaps = {} # {dateobs: Skymap}
+    skipped_events = set() # {dateobs} of events already reported as not usable
 
     check_for_gcn_events_timer = None
     heartbeat_timer = time.time()
@@ -108,9 +109,10 @@ def boom_gcn_pipeline(gcn=None, slack=None):
                 # Check for new GCN events or new localizations for existing events with "< 1000 sq. deg." tag
                 new_gcn_events = []
                 for event in skyportal.get_gcn_events(fallback(GCN)):
-                    if not event.get("aliases") or not any("#" in alias for alias in event["aliases"]):
-                        if event.get("aliases"):
-                            log(f"Skipping GCN event {event['dateobs']} due to bad aliases: {event['aliases']}")
+                    if not any("#" in alias for alias in event.get("aliases") or []):
+                        if event["dateobs"] not in skipped_events:
+                            skipped_events.add(event["dateobs"])
+                            log(f"Skipping GCN event {event['dateobs']} due to bad aliases: {event.get('aliases')}")
                         continue # Filter out GCN events with bad or no aliases
 
                     event["localization"] = next(
@@ -133,6 +135,7 @@ def boom_gcn_pipeline(gcn=None, slack=None):
 
                 # Clean up old skymaps (GCN events older than fallback)
                 gcn_fallback_iso = fallback(GCN, date_format="iso")[:19]
+                skipped_events = {d for d in skipped_events if d >= gcn_fallback_iso}
                 for dateobs in list(skymaps.keys()):
                     if dateobs < gcn_fallback_iso:
                         log(f"Removed expired skymap {dateobs} from skymaps")
