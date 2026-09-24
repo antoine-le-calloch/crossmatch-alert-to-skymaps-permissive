@@ -3,9 +3,13 @@ import io
 import time
 import requests
 
+from requests.adapters import HTTPAdapter
+from urllib3.util.retry import Retry
+
 from utils.logger import log, RED, YELLOW, ENDC
 
 SLOW_RESPONSE_THRESHOLD = 5  # seconds
+REQUEST_TIMEOUT = 10  # seconds
 
 class APIError(Exception):
     pass
@@ -38,6 +42,8 @@ def handle_timeout(method):
             raise APIError(f"{RED}Api error in {get_request_type(method.__name__, args)}{ENDC} - {e}")
         except requests.exceptions.Timeout:
             raise APIError(f"{RED}Timeout error{ENDC} - SkyPortal API not responding to {YELLOW}{get_request_type(method.__name__, args)}{ENDC} request")
+        except requests.exceptions.RequestException as e:
+            raise APIError(f"{RED}Request error{ENDC} in {get_request_type(method.__name__, args)} - {type(e).__name__}")
     return wrapper
 
 
@@ -72,6 +78,13 @@ class SkyPortal:
         
         self.headers = {'Authorization': f'token {token}'}
 
+        self.session = requests.Session()
+        adapter = HTTPAdapter(max_retries=Retry(
+            total=2, backoff_factor=1, status_forcelist=[500, 502, 503, 504], raise_on_status=False
+        ))
+        self.session.mount('https://', adapter)
+        self.session.mount('http://', adapter)
+
         # ping it to make sure it's up, if validate is True
         if validate:
             if not self.ping():
@@ -90,7 +103,7 @@ class SkyPortal:
         bool
             True if the API is available, False otherwise
         """
-        response = requests.get(f"{self.base_url}/api/sysinfo", timeout=40)
+        response = self.session.get(f"{self.base_url}/api/sysinfo", timeout=REQUEST_TIMEOUT)
         return response.status_code == 200
 
     @handle_timeout
@@ -103,10 +116,10 @@ class SkyPortal:
         bool
             True if the token is valid, False otherwise
         """
-        response = requests.get(
+        response = self.session.get(
             f"{self.base_url}/api/config",
             headers=self.headers,
-            timeout=40
+            timeout=REQUEST_TIMEOUT
         )
         return response.status_code == 200
 
@@ -134,9 +147,9 @@ class SkyPortal:
         """
         endpoint = f'{self.base_url}/{endpoint.strip("/")}'
         if method == 'GET':
-            response = requests.request(method, endpoint, params=data, headers=self.headers, timeout=40)
+            response = self.session.request(method, endpoint, params=data, headers=self.headers, timeout=REQUEST_TIMEOUT)
         else:
-            response = requests.request(method, endpoint, json=data, headers=self.headers, timeout=40)
+            response = self.session.request(method, endpoint, json=data, headers=self.headers, timeout=REQUEST_TIMEOUT)
 
         if return_response:
             return response
