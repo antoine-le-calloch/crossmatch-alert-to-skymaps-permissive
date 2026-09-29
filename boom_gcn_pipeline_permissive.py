@@ -25,6 +25,7 @@ GCN = 24*8  # hours for GCN fallback
 FIRST_DETECTION = 24*7  # hours for first detection fallback
 SLEEP_TIME = 20 # seconds between each loop
 HEARTBEAT_INTERVAL = 120 # seconds between each heartbeat log
+MAX_GW_AREA_90 = 5000 # sq. deg., larger GW skymaps are ignored
 
 
 def get_all_photometry(alert):
@@ -106,6 +107,9 @@ def crossmatch_and_publish(alert, filtered_photometry, candidate_skymaps, publis
             log(f"Skipping already processed skymap {dateobs} for object {obj_id}")
             continue # This skymap has already been processed for this object
 
+        if skymap.type == "GW" and skymap.area_90 and skymap.area_90 > MAX_GW_AREA_90:
+            continue # Too large to be informative, most new transients in it would match
+
         if skymap.contains(alert["ra"], alert["dec"]):
             matching_skymaps[dateobs] = skymap
             distance_info = get_distance_info(skymap, alert, filtered_photometry)
@@ -170,7 +174,7 @@ def boom_gcn_pipeline(gcn=None, slack=None):
                 if not skyportal.ping():
                     log(f"{YELLOW}SkyPortal API is not available, keeping the skymaps already fetched{ENDC}")
                 else:
-                    # Check for new GCN events or new localizations for existing events with "< 1000 sq. deg." tag
+                    # Check for new GCN events or new localizations for existing events (GW of any size, others with "< 1000 sq. deg." tag)
                     new_gcn_events = []
                     for event in skyportal.get_gcn_events(fallback(GCN), ns_probability_threshold=0.1):
                         if not get_alias(event):
@@ -179,9 +183,10 @@ def boom_gcn_pipeline(gcn=None, slack=None):
                                 log(f"Skipping GCN event {event['dateobs']} due to bad aliases: {event.get('aliases')}")
                             continue # Filter out GCN events with bad or no aliases
 
+                        is_gw = "GW" in (event.get("tags") or [])
                         event["localization"] = next(
                             (loc for loc in event.get("localizations", [])
-                             if any(tag["text"] == "< 1000 sq. deg." for tag in loc.get("tags", []))),
+                             if is_gw or any(tag["text"] == "< 1000 sq. deg." for tag in loc.get("tags", []))),
                             None
                         )
                         if event["localization"] is None:
