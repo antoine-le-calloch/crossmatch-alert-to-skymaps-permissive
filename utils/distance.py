@@ -23,7 +23,7 @@ def get_host_distance(alert):
 
 def get_line_of_sight_distance(distmu, distsigma):
     """Mean, standard deviation and CDF of the GW distance along a line of sight."""
-    r = np.linspace(0, distmu + 6 * distsigma, 4000)[1:]
+    r = np.linspace(0, max(distmu, 0) + 6 * distsigma, 4000)[1:]
     pdf = r**2 * np.exp(-0.5 * ((r - distmu) / distsigma) ** 2)
     pdf /= pdf.sum()
     mean = float((r * pdf).sum())
