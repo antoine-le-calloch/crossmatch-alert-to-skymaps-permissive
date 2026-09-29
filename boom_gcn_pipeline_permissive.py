@@ -42,8 +42,8 @@ def get_filtered_photometry(alert, snr_threshold, first_detection_fallback):
     on the first detection fallback.
 
     A detection is any photometry point (including forced photometry) with SNR >= snr_threshold.
-    Points with missing flux_err or negative flux are skipped entirely; points below the SNR
-    threshold are treated as non-detection.
+    Points with missing flux_err and alert points with negative flux are skipped entirely; points
+    below the SNR threshold (including negative forced photometry) are treated as non-detection.
 
     Parameters
     ----------
@@ -62,11 +62,15 @@ def get_filtered_photometry(alert, snr_threshold, first_detection_fallback):
     last_non_detection = []
     filtered_photometry = []
     for phot in reversed(get_all_photometry(alert)):  # From the most recent to the oldest
-        if phot["origin"] == "ForcedPhot" or not phot["flux_err"] or (phot["flux"] and phot["flux"] < 0):
-            continue # Skip forced photometry, no flux_err and negative fluxes
+        is_forced = phot["origin"] == "ForcedPhot"
+        if not phot["flux_err"] or (not is_forced and phot["flux"] and phot["flux"] < 0):
+            continue # Skip no flux_err and negative alert fluxes
 
-        if phot["flux"] and phot["flux"] / phot["flux_err"] >= snr_threshold:  # Detection
+        snr = phot["flux"] / phot["flux_err"] if phot["flux"] else 0
+        if snr >= snr_threshold:  # Detection
             if phot["jd"] < first_detection_fallback:
+                if is_forced and snr < 5:
+                    continue # A low SNR forced photometry point is not enough to call the object too old
                 # A detection older than first_detection_fallback means the object is too old, skip it
                 return None
             last_non_detection = []  # Reset last non-detection as we found a detection
