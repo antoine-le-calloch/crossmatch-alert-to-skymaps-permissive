@@ -123,7 +123,7 @@ def boom_gcn_pipeline(gcn=None, slack=None):
                 else:
                     # Check for new GCN events or new localizations for existing events with "< 1000 sq. deg." tag
                     new_gcn_events = []
-                    for event in skyportal.get_gcn_events(fallback(GCN)):
+                    for event in skyportal.get_gcn_events(fallback(GCN), ns_probability_threshold=0.1):
                         if not get_alias(event):
                             if event["dateobs"] not in skipped_events:
                                 skipped_events.add(event["dateobs"])

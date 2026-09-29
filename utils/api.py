@@ -77,6 +77,7 @@ class SkyPortal:
             self.base_url += f':{port}'
         
         self.headers = {'Authorization': f'token {token}'}
+        self.ns_probabilities = {}  # {(dateobs, number of notices): P(BNS) + P(NSBH)}
 
         self.session = requests.Session()
         adapter = HTTPAdapter(max_retries=Retry(
@@ -185,13 +186,37 @@ class SkyPortal:
             time.sleep(0.3)
         return items
 
-    def get_gcn_events(self, dateobs):
+    def get_ns_probability(self, event):
         """
-        Get GCN events from SkyPortal filtered by dateobs and
-        specific tags:
-        - GW (any size)
-        - BNS (any size)
-        - NSBH (any size)
+        P(BNS) + P(NSBH) of a GW event, from the properties of its most recent notice
+
+        Properties are only fetched again when the event receives a new notice.
+
+        Parameters
+        ----------
+        event : dict
+            GCN event from the /api/gcn_event list
+
+        Returns
+        -------
+        float
+            Probability that the event is an astrophysical merger with a neutron star, 0 if unknown
+        """
+        key = (event["dateobs"], len(event.get("gcn_notices") or []))
+        if key not in self.ns_probabilities:
+            details = self.api("GET", f"/api/gcn_event/{event['dateobs']}", data={"excludeNoticeContent": True})
+            latest = next(
+                (p["data"] for p in details.get("properties") or [] if "BNS" in p["data"] or "NSBH" in p["data"]),
+                {}
+            )
+            self.ns_probabilities = {k: v for k, v in self.ns_probabilities.items() if k[0] != event["dateobs"]}
+            self.ns_probabilities[key] = (latest.get("BNS") or 0) + (latest.get("NSBH") or 0)
+        return self.ns_probabilities[key]
+
+    def get_gcn_events(self, dateobs, ns_probability_threshold=0.5):
+        """
+        Get GCN events from SkyPortal filtered by dateobs:
+        - GW with P(BNS) + P(NSBH) >= ns_probability_threshold (any size, not retracted, not MLy)
         - SVOM (any notice)
         - Einstein Probe (any notice)
         - Fermi (< 1000 sq. deg.)
@@ -201,6 +226,8 @@ class SkyPortal:
         ----------
         dateobs : datetime.datetime
             Date of observation to filter GCN events from
+        ns_probability_threshold : float, optional
+            Minimum P(BNS) + P(NSBH) of the most recent notice for a GW event to be kept
 
         Returns
         -------
@@ -212,21 +239,24 @@ class SkyPortal:
             "excludeNoticeContent": True,
         }
 
-        # Get GCN events with GW, BNS, NSBH, SVOM or Einstein Probe and without BBH, MLy or Terrestrial tags.
-        gcn_events = self.fetch_all_pages(
+        gw_events = self.fetch_all_pages(
             "/api/gcn_event",
-            {
-                **payload,
-                "gcnTagKeep":"GW,BNS,NSBH,SVOM,Einstein Probe",
-                "gcnTagRemove": "BBH,MLy,Terrestrial"
-            },
+            {**payload, "gcnTagKeep": "GW", "gcnTagRemove": "retracted,MLy"},
+            "events"
+        )
+        gcn_events = [event for event in gw_events if self.get_ns_probability(event) >= ns_probability_threshold]
+        gw_dateobs = {event["dateobs"] for event in gw_events}
+        self.ns_probabilities = {k: v for k, v in self.ns_probabilities.items() if k[0] in gw_dateobs}
+
+        gcn_events += self.fetch_all_pages(
+            "/api/gcn_event",
+            {**payload, "gcnTagKeep": "SVOM,Einstein Probe"},
             "events"
         )
 
-        # Get GCN events with Fermi tag and localization < 1000 sq.deg.
         gcn_events += self.fetch_all_pages(
             "/api/gcn_event",
-            {**payload,"gcnTagKeep": "Fermi","localizationTagKeep": "< 1000 sq. deg."},
+            {**payload, "gcnTagKeep": "Fermi", "localizationTagKeep": "< 1000 sq. deg."},
             "events"
         )
 
