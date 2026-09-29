@@ -221,44 +221,74 @@ def read_skymap_fits(bytes_io, cumulative_probability):
     return moc, area_90, distance
 
 
-def plot_object_on_skymap(obj, moc):
+ZOOM_MAX_AREA_90 = 100  # sq. deg.
+
+
+def plot_object_on_skymap(obj, skymap):
     """
-    Returns a PNG image of the skymap with the object overlaid.
+    Returns a PNG image of the skymap with the object overlaid: a view zoomed on the object
+    when the 90% area is below ZOOM_MAX_AREA_90, otherwise the whole sky.
 
     Parameters
     ----------
     obj : dict
         Object with {"objectId", "ra", "dec"} in degrees.
-    moc : MOC
-        The MOC object representing the skymap.
+    skymap : Skymap
+        The skymap to plot.
 
     Returns
     -------
     bytes : BytesIO
         A BytesIO object containing the PNG image data.
     """
-    projection = WCS({
-        "naxis": 2,
-        "naxis1": 1620,
-        "naxis2": 810,
-        "crpix1": 810.5,
-        "crpix2": 405.5,
-        "cdelt1": -0.2,
-        "cdelt2": 0.2,
-        "ctype1": "RA---AIT",
-        "ctype2": "DEC--AIT",
-        "crval1": 0.0,
-        "crval2": 0.0,
-    })
+    zoom = skymap.area_90 is not None and skymap.area_90 < ZOOM_MAX_AREA_90
+    if zoom:
+        npix = 600
+        field_of_view = max(6 * np.sqrt(skymap.area_90 / np.pi), 2 / 60)
+        projection = WCS({
+            "naxis": 2,
+            "naxis1": npix,
+            "naxis2": npix,
+            "crpix1": npix / 2 + 0.5,
+            "crpix2": npix / 2 + 0.5,
+            "cdelt1": -field_of_view / npix,
+            "cdelt2": field_of_view / npix,
+            "ctype1": "RA---TAN",
+            "ctype2": "DEC--TAN",
+            "crval1": obj["ra"],
+            "crval2": obj["dec"],
+        })
+        fig = plt.figure(figsize=(6, 6))
+        ax = fig.add_subplot(1, 1, 1, projection=projection)
+        ax.set_xlim(-0.5, npix - 0.5)
+        ax.set_ylim(-0.5, npix - 0.5)
+        ax.coords[0].set_axislabel("RA")
+        ax.coords[1].set_axislabel("Dec")
+    else:
+        projection = WCS({
+            "naxis": 2,
+            "naxis1": 1620,
+            "naxis2": 810,
+            "crpix1": 810.5,
+            "crpix2": 405.5,
+            "cdelt1": -0.2,
+            "cdelt2": 0.2,
+            "ctype1": "RA---AIT",
+            "ctype2": "DEC--AIT",
+            "crval1": 0.0,
+            "crval2": 0.0,
+        })
+        fig = plt.figure(figsize=(10, 5))
+        ax = fig.add_subplot(1, 1, 1, projection=projection, frame_class=EllipticalFrame)
+        ax.coords[0].set_ticklabel_visible(False)
 
-    fig = plt.figure(figsize=(10, 5))
-    ax = fig.add_subplot(1, 1, 1, projection=projection, frame_class=EllipticalFrame)
-    moc.fill(ax=ax, wcs=projection, alpha=0.4, color="red")
-    moc.border(ax=ax, wcs=projection, color="red")
+    skymap.moc.fill(ax=ax, wcs=projection, alpha=0.4, color="red", linewidth=0)
+    skymap.moc.border(ax=ax, wcs=projection, color="red")
     ax.grid()
-    ax.coords[0].set_ticklabel_visible(False)
     ax.scatter(obj["ra"], obj["dec"], transform=ax.get_transform("world"),marker='*',
                s=120, c="blue", edgecolor="black", label=obj["objectId"], zorder=2)
+    if zoom:
+        ax.set_title(f"{skymap.alias} (90% area: {skymap.area_90:.3g} sq. deg.)")
 
     buffer = io.BytesIO()
     plt.savefig(buffer, format="png", bbox_inches="tight")
@@ -288,7 +318,7 @@ def display_skymaps(obj, skymaps, plot=False):
 
         if plot:
             fig, ax = plt.subplots(figsize=(10, 5))
-            ax.imshow(mpimg.imread(plot_object_on_skymap(obj, skymap.moc)))
+            ax.imshow(mpimg.imread(plot_object_on_skymap(obj, skymap)))
             ax.axis("off")
             ax.set_title(f"[{is_match}] {skymap.alias} — {dateobs}")
             plt.show()

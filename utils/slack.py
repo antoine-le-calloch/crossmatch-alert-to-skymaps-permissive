@@ -69,5 +69,5 @@ class SlackNotifier:
                 channel=self.channel_id,
                 filename=f"{obj['objectId']}_{skymap.alias}.png",
                 initial_comment=f"*Alias:* <{self.skyportal_url}/gcn_events/{dateobs}|{skymap.alias}>",
-                file=plot_object_on_skymap(obj, skymap.moc),
+                file=plot_object_on_skymap(obj, skymap),
             )
