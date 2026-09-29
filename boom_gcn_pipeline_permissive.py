@@ -38,8 +38,8 @@ def get_all_photometry(alert):
 def get_filtered_photometry(alert, snr_threshold, first_detection_fallback):
     """
     Filter the photometry of an alert (and of its crossmatches in the other surveys) to keep only
-    the last non-detection and all detections, while also checking if the object is too old based
-    on the first detection fallback.
+    the last non-detection, if any, and all detections, while also checking if the object is too
+    old based on the first detection fallback.
 
     A detection is any photometry point (including forced photometry) with SNR >= snr_threshold.
     Points with missing flux_err and alert points with negative flux are skipped entirely; points
@@ -56,8 +56,8 @@ def get_filtered_photometry(alert, snr_threshold, first_detection_fallback):
     Returns
     -------
     list or None
-        A list of photometry points that includes the last non-detection and all detections,
-        or None if too old or if there are no non-detections.
+        A list of photometry points that includes the last non-detection (flux None), if any,
+        and all detections, or None if too old or if there are no detections.
     """
     last_non_detection = []
     filtered_photometry = []
@@ -78,24 +78,27 @@ def get_filtered_photometry(alert, snr_threshold, first_detection_fallback):
         elif not last_non_detection:
             last_non_detection = [{**phot, "flux": None}]
 
-    if not filtered_photometry and not last_non_detection:
-        log(f"{RED}Alert {alert['objectId']} does not have any valid detection or non-detection.{ENDC}")
-        return None
-    if not last_non_detection:
-        log(f"{YELLOW}Alert {alert['objectId']} does not have any non-detection before the first detection, skipping it.{ENDC}")
+    if not filtered_photometry:
+        log(f"{RED}Alert {alert['objectId']} does not have any valid detection.{ENDC}")
         return None
 
     # Keep the last non-detection and all detections
     return last_non_detection + list(reversed(filtered_photometry))
 
 
+def get_first_detection_jd(filtered_photometry):
+    return next(phot["jd"] for phot in filtered_photometry if phot["flux"] is not None)
+
+
 def crossmatch_and_publish(alert, filtered_photometry, candidate_skymaps, published_matches, gcn=None, slack=None):
     """Crossmatch an alert with candidate skymaps and publish a notice for the new matches."""
     obj_id = alert["objectId"]
+    first_detection_jd = get_first_detection_jd(filtered_photometry)
+    last_non_detection_jd = filtered_photometry[0]["jd"] if filtered_photometry[0]["flux"] is None else None
     matching_skymaps = {}
     for dateobs, skymap in candidate_skymaps.items():
-        if not filtered_photometry[0]["jd"] <= skymap.jd <= filtered_photometry[1]["jd"]:
-            continue # Skymap is not between the last non-detection and the first detection
+        if skymap.jd > first_detection_jd or (last_non_detection_jd is not None and skymap.jd < last_non_detection_jd):
+            continue # Skymap is not between the last non-detection (if any) and the first detection
 
         if obj_id in published_matches and (dateobs, skymap.created_at) in published_matches[obj_id].get("skymaps", set()):
             log(f"Skipping already processed skymap {dateobs} for object {obj_id}")
@@ -122,7 +125,7 @@ def crossmatch_and_publish(alert, filtered_photometry, candidate_skymaps, publis
     if obj_id not in published_matches:
         published_matches[obj_id] = {
             "skymaps": dateobs_created_at_tuple,
-            "first_detection_jd": filtered_photometry[1]["jd"],
+            "first_detection_jd": first_detection_jd,
         }
     else:
         published_matches[obj_id]["skymaps"].update(dateobs_created_at_tuple)
@@ -204,7 +207,7 @@ def boom_gcn_pipeline(gcn=None, slack=None):
                             log(f"Removed expired object {obj_id} from published_matches")
                             del published_matches[obj_id]
                     for obj_id, (_, filtered_photometry) in list(recent_alerts.items()):
-                        if filtered_photometry[1]["jd"] < first_detection_fallback_jd:
+                        if get_first_detection_jd(filtered_photometry) < first_detection_fallback_jd:
                             del recent_alerts[obj_id]
 
                     new_skymaps = {dateobs: skymap for dateobs, skymap in new_skymaps.items() if dateobs in skymaps}
@@ -235,8 +238,8 @@ def boom_gcn_pipeline(gcn=None, slack=None):
             new_processed_alerts += 1
 
             filtered_photometry = get_filtered_photometry(alert, snr_threshold, fallback(FIRST_DETECTION, date_format="jd"))
-            if not filtered_photometry or len(filtered_photometry) < 2:
-                continue # The First detection is too old or the alert doesn't have any detections/non-detections
+            if not filtered_photometry:
+                continue # The First detection is too old or the alert doesn't have any detections
 
             for cutout in ("cutoutScience", "cutoutTemplate", "cutoutDifference"):
                 alert.pop(cutout, None)
