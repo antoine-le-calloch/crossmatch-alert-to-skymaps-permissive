@@ -7,7 +7,16 @@ from datetime import datetime, timedelta, UTC
 # so we need to adjust the zero point accordingly.
 BOOM_ZTF_FLUX_ZP = 23.9 + 2.5 * math.log10(1e9)
 BOOM_LSST_FLUX_ZP = 8.9 + 2.5 * math.log10(1e9)
+SURVEYS = {
+    "ZTF": {"telescope": "Palomar 1.2m Oschin", "instrument": "ZTF", "zp": BOOM_ZTF_FLUX_ZP},
+    "LSST": {"telescope": "Vera C. Rubin Observatory Simonyi Survey Telescope", "instrument": "LSSTCam", "zp": BOOM_LSST_FLUX_ZP},
+}
 _FACTOR = 2.5 / math.log(10)
+
+def get_survey(obj, phot):
+    """Survey of a photometry point (telescope, instrument, flux zero point), falling back on the survey of its alert."""
+    return SURVEYS[(phot.get("survey") or obj.get("survey") or "ZTF").upper()]
+
 
 def flux_to_mag(flux, zp=BOOM_ZTF_FLUX_ZP):
     """Convert flux to AB magnitude."""

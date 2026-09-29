@@ -4,20 +4,15 @@ from dotenv import load_dotenv
 from astropy.time import Time
 
 from utils.logger import log, YELLOW, GREEN, ENDC
-from utils.converter import flux_to_mag, flux_err_to_mag_error, flux_err_to_limiting_mag, str_to_bool, BOOM_ZTF_FLUX_ZP, BOOM_LSST_FLUX_ZP
+from utils.converter import flux_to_mag, flux_err_to_mag_error, flux_err_to_limiting_mag, str_to_bool, get_survey
 
 load_dotenv()
 
 SCHEMA = "https://gcn.nasa.gov/schema/v7.0.0/gcn/notices/boom/alert.schema.json"
 
-SURVEYS = {
-    "ZTF": {"telescope": "Palomar 1.2m Oschin", "instrument": "ZTF", "zp": BOOM_ZTF_FLUX_ZP},
-    "LSST": {"telescope": "Vera C. Rubin Observatory Simonyi Survey Telescope", "instrument": "LSSTCam", "zp": BOOM_LSST_FLUX_ZP},
-}
-
 
 def format_photometry(obj, p):
-    survey = SURVEYS[(p.get("survey") or obj.get("survey") or "ZTF").upper()]
+    survey = get_survey(obj, p)
     return {
         "event_name": obj["objectId"],
         "observation_start": Time(p["jd"], format="jd", precision=3).isot + "Z",

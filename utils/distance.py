@@ -1,8 +1,7 @@
 import math
 import numpy as np
 
-from utils.converter import flux_to_mag
-from utils.gcn import SURVEYS
+from utils.converter import flux_to_mag, get_survey
 
 C_OVER_H0_MPC = 299792.458 / 70.0
 MIN_HOST_POSTERIOR = 0.5
@@ -32,10 +31,10 @@ def get_line_of_sight_distance(distmu, distsigma):
     return mean, std, lambda distance: float(np.interp(distance, r, np.cumsum(pdf)))
 
 
-def get_peak_mag(filtered_photometry):
+def get_peak_mag(alert, filtered_photometry):
     """Brightest AB magnitude of the detections."""
     mags = [
-        flux_to_mag(phot["flux"], SURVEYS[(phot.get("survey") or "ZTF").upper()]["zp"])
+        flux_to_mag(phot["flux"], get_survey(alert, phot)["zp"])
         for phot in filtered_photometry if phot["flux"] is not None and phot["flux"] > 0
     ]
     return min(mags) if mags else None
@@ -57,7 +56,7 @@ def get_distance_info(skymap, alert, filtered_photometry):
 
     gw_mean, gw_std, gw_cdf = get_line_of_sight_distance(*distance)
     host_distance = get_host_distance(alert)
-    peak_mag = get_peak_mag(filtered_photometry)
+    peak_mag = get_peak_mag(alert, filtered_photometry)
     reference_distance = host_distance or gw_mean
     return {
         "gw_distance_mpc": gw_mean,
