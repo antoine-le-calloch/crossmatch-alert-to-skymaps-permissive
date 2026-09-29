@@ -44,7 +44,7 @@ Edit the `.env` file to set your configuration.
 **BOOM Kafka (input alerts)**
 - `BOOM_KAFKA_SERVER`: Kafka broker URL (e.g. `kaboom.caltech.edu:9093` or `babamul.umn.edu:9093`).
 - `BOOM_KAFKA_USERNAME` / `BOOM_KAFKA_PASSWORD`: credentials.
-- `BOOM_KAFKA_TOPIC`: topic to consume from (e.g. `ZTF_alerts_results`).
+- `BOOM_KAFKA_TOPICS`: comma-separated topics to consume from (e.g. `ZTF_alerts_results,LSST_alerts_results`).
 - `BOOM_KAFKA_FILTERS`: comma-separated BOOM filter names to keep (e.g. `public_fast_transient_ztf,public_galactic_fast_transient_ztf`).
 
 **GCN Kafka (output notices)**

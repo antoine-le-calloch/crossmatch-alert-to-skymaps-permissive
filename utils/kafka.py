@@ -38,13 +38,16 @@ def boom_consumer(topics=None):
     ----------
     topics : list of str, optional
         A list of Kafka topics to subscribe to. If None, it will subscribe to
-        the topic specified in the BOOM_KAFKA_TOPIC environment variable.
+        the comma-separated topics specified in the BOOM_KAFKA_TOPICS environment variable.
 
     Returns
     -------
     Consumer
         A Kafka consumer configured to consume from the BOOM alert stream.
     """
+    topics = topics or [topic.strip() for topic in os.getenv("BOOM_KAFKA_TOPICS", "").split(",") if topic.strip()]
+    if not topics:
+        raise ValueError("No Kafka topic to subscribe to: set BOOM_KAFKA_TOPICS")
     boom_config = {
         'bootstrap.servers': os.getenv("BOOM_KAFKA_SERVER"),
         'group.id': f'umn_boom_kafka_consumer_group_{datetime.now(UTC).strftime("%Y_%m_%d_%H_%M_%S")}',
@@ -59,9 +62,8 @@ def boom_consumer(topics=None):
             "security.protocol": "PLAINTEXT"
         })
     }
-    consumer = Consumer(boom_config)
 
-    topics = topics or [os.getenv("BOOM_KAFKA_TOPIC")]
+    consumer = Consumer(boom_config)
     consumer.subscribe(topics)
-    log(f"Subscribed to topic: {topics}")
+    log(f"Subscribed to topics: {topics}")
     return consumer
