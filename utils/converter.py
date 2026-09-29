@@ -6,6 +6,7 @@ from datetime import datetime, timedelta, UTC
 # BOOM stores ZTF flux as mag2flux(mag, 23.9) * 1e9 (see boom/src/alert/ztf.rs),
 # so we need to adjust the zero point accordingly.
 BOOM_ZTF_FLUX_ZP = 23.9 + 2.5 * math.log10(1e9)
+BOOM_LSST_FLUX_ZP = 8.9 + 2.5 * math.log10(1e9)
 _FACTOR = 2.5 / math.log(10)
 
 def flux_to_mag(flux, zp=BOOM_ZTF_FLUX_ZP):

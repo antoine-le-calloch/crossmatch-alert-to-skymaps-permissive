@@ -26,10 +26,20 @@ SLEEP_TIME = 20 # seconds between each loop
 HEARTBEAT_INTERVAL = 120 # seconds between each heartbeat log
 
 
+def get_all_photometry(alert):
+    """Photometry of the alert and of its crossmatched objects in the other surveys, sorted by jd."""
+    photometry = list(alert.get("photometry") or [])
+    for survey_match in (alert.get("survey_matches") or {}).values():
+        if survey_match:
+            photometry += survey_match.get("photometry") or []
+    return sorted(photometry, key=lambda phot: phot["jd"])
+
+
 def get_filtered_photometry(alert, snr_threshold, first_detection_fallback):
     """
-    Filter the photometry of an alert to keep only the last non-detection and all detections,
-    while also checking if the object is too old based on the first detection fallback.
+    Filter the photometry of an alert (and of its crossmatches in the other surveys) to keep only
+    the last non-detection and all detections, while also checking if the object is too old based
+    on the first detection fallback.
 
     A detection is any photometry point (including forced photometry) with SNR >= snr_threshold.
     Points with missing flux_err or negative flux are skipped entirely; points below the SNR
@@ -51,7 +61,7 @@ def get_filtered_photometry(alert, snr_threshold, first_detection_fallback):
     """
     last_non_detection = []
     filtered_photometry = []
-    for phot in reversed(alert.get("photometry", [])):  # From the most recent to the oldest
+    for phot in reversed(get_all_photometry(alert)):  # From the most recent to the oldest
         if phot["origin"] == "ForcedPhot" or not phot["flux_err"] or (phot["flux"] and phot["flux"] < 0):
             continue # Skip forced photometry, no flux_err and negative fluxes
 
@@ -62,7 +72,7 @@ def get_filtered_photometry(alert, snr_threshold, first_detection_fallback):
             last_non_detection = []  # Reset last non-detection as we found a detection
             filtered_photometry.append(phot)
         elif not last_non_detection:
-            last_non_detection = [phot]
+            last_non_detection = [{**phot, "flux": None}]
 
     if not filtered_photometry and not last_non_detection:
         log(f"{RED}Alert {alert['objectId']} does not have any valid detection or non-detection.{ENDC}")
