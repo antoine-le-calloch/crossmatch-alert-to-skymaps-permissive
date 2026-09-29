@@ -48,14 +48,16 @@ class SlackNotifier:
                 self.client.chat_delete(channel=self.channel_id, ts=message["ts"])
                 time.sleep(1.3)  # To avoid hitting rate limits
 
-    def send(self, obj, matching_skymaps, gcn_payload):
-        """Send a message to Slack with the object details and crossmatch plots."""
+    def send(self, obj, matching_skymaps, gcn_payload, notes=None):
+        """Send a message to Slack with the object details, optional notes and crossmatch plots."""
+        notes_text = "".join(f"*Distance:* {note}\n" for note in notes or [])
         self.client.files_upload_v2(
             channel=self.channel_id,
             initial_comment=(
                 f"*New object in Skymaps localization*\n"
                 f"*Date:* {datetime.now(UTC).replace(microsecond=0).isoformat()} UTC\n"
                 f"*Object:* <{self.skyportal_url}/source/{obj['objectId']}|{obj['objectId']}>\n"
+                f"{notes_text}"
                 f"*GCN notice payload:*"
             ),
             title=f"gcn_notice_payload_{obj['objectId']}_{'_'.join([skymap.alias for skymap in matching_skymaps.values()])}.json",

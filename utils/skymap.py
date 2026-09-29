@@ -16,6 +16,34 @@ from utils.logger import log
 
 
 @dataclass
+class SkymapDistance:
+    """Per-pixel distance ansatz of a 3D GW skymap: p(r) is proportional to r^2 N(r; distmu, distsigma)."""
+    uniq: np.ndarray
+    distmu: np.ndarray
+    distsigma: np.ndarray
+    _lookup: dict = field(init=False, repr=False)
+
+    def __post_init__(self):
+        levels, ipix = uniq_to_level_ipix(self.uniq)
+        self._lookup = {}
+        for level in np.unique(levels):
+            selected = np.nonzero(levels == level)[0]
+            self._lookup[int(level)] = dict(zip(ipix[selected].tolist(), selected.tolist()))
+
+    def at(self, ra, dec):
+        """Return (distmu, distsigma) in Mpc at the given position, or None outside the map."""
+        for level, pixels in self._lookup.items():
+            ipix = HEALPix(nside=2**level, order="nested").lonlat_to_healpix(ra * u.deg, dec * u.deg)
+            index = pixels.get(int(ipix))
+            if index is not None:
+                mu, sigma = float(self.distmu[index]), float(self.distsigma[index])
+                if np.isfinite(mu) and np.isfinite(sigma) and sigma > 0:
+                    return mu, sigma
+                return None
+        return None
+
+
+@dataclass
 class Skymap:
     """A Skymap represents a localization region for a GCN event, defined by a MOC and associated metadata.
 
@@ -31,6 +59,10 @@ class Skymap:
         The timestamp when the last localization was created, in ISO format (e.g., "2024-06-01T13:00:00Z").
     tags : list[str]
         A list of tags associated with the event, such as "GW", "GRB", "SVOM" or "Einstein Probe"
+    area_90 : float or None
+        Area of the 90% credible region, in square degrees.
+    distance : SkymapDistance or None
+        Per-pixel distance of the localization, for 3D GW skymaps only.
     jd : float
         The Julian Date corresponding to dateobs.
     """
@@ -39,6 +71,8 @@ class Skymap:
     moc: MOC
     created_at: str
     tags: list[str]
+    area_90: float = None
+    distance: SkymapDistance = None
     jd: float = field(init=False)
 
     def __post_init__(self):
@@ -101,18 +135,27 @@ def get_skymap(skyportal, cumulative_probability, event):
     bytes_io = skyportal.download_localization(
         localization["dateobs"], localization["localization_name"]
     )
-    moc = get_moc_from_fits(bytes_io, cumulative_probability)
+    moc, area_90, distance = read_skymap_fits(bytes_io, cumulative_probability)
     return Skymap(
         dateobs=event["dateobs"],
         alias=get_alias(event) or "No aliases",
         moc=moc,
         created_at=localization["created_at"],
-        tags=event.get("tags", [])
+        tags=event.get("tags", []),
+        area_90=area_90,
+        distance=distance,
     )
 
 
-def get_moc_from_fits(bytes_io, cumulative_probability):
-    """Extract MOC from a FITS file containing a HEALPix skymap.
+def uniq_to_level_ipix(uniq):
+    """Split HEALPix UNIQ indices into their level (log2 nside) and NESTED pixel index."""
+    uniq = np.asarray(uniq, dtype=np.int64)
+    levels = (np.log2(uniq // 4) // 2).astype(np.int64)
+    return levels, uniq - 4 * 4**levels
+
+
+def read_skymap_fits(bytes_io, cumulative_probability):
+    """Read a FITS HEALPix skymap.
 
     Parameters
     ----------
@@ -120,18 +163,25 @@ def get_moc_from_fits(bytes_io, cumulative_probability):
         A BytesIO object containing the FITS file data.
     cumulative_probability : float
         The cumulative probability threshold for the MOC.
+
+    Returns
+    -------
+    tuple
+        The MOC at cumulative_probability, the 90% area in square degrees,
+        and the SkymapDistance (None if the skymap has no distance columns).
     """
     with fits.open(bytes_io) as hdul:
         data = hdul[1].data
         columns = [col.name for col in hdul[1].columns]
         header = hdul[1].header
 
+    distance_columns = {name: None for name in ("DISTMU", "DISTSIGMA")}
     if "UNIQ" in columns:
-        uniq = data["UNIQ"]
-        probdensity = data["PROBDENSITY"]
-        orders = (np.log2(uniq // 4)) // 2
-        area = np.pi / (3 * 4**orders) * u.sr
-        prob = probdensity * area
+        uniq = np.asarray(data["UNIQ"], dtype=np.int64)
+        prob = np.asarray(data["PROBDENSITY"]) * np.pi / (3 * 4.0**uniq_to_level_ipix(uniq)[0])
+        for name in distance_columns:
+            if name in columns:
+                distance_columns[name] = np.asarray(data[name], dtype=float)
     else:
         prob_col = next(c for c in columns if c in ("PROB", "PROBABILITY", "PROBDENSITY"))
         prob = np.ravel(data[prob_col])
@@ -140,20 +190,33 @@ def get_moc_from_fits(bytes_io, cumulative_probability):
         order = int(np.log2(nside))
 
         # UNIQ scheme uses NESTED ordering
-        ordering = header.get("ORDERING", "NESTED").upper()
-        if ordering == "RING":
-            ring_hp = HEALPix(nside=nside, order="ring")
-            nested_hp = HEALPix(nside=nside, order="nested")
-            lon, lat = ring_hp.healpix_to_lonlat(np.arange(npix))
-            nested_indices = nested_hp.lonlat_to_healpix(lon, lat)
+        nested_indices = np.arange(npix)
+        if header.get("ORDERING", "NESTED").upper() == "RING":
+            lon, lat = HEALPix(nside=nside, order="ring").healpix_to_lonlat(np.arange(npix))
+            nested_indices = HEALPix(nside=nside, order="nested").lonlat_to_healpix(lon, lat)
+
+        def to_nested(values):
             reordered = np.empty(npix)
-            reordered[nested_indices] = prob
-            prob = reordered
+            reordered[nested_indices] = np.ravel(values)
+            return reordered
 
-        indices = np.arange(npix)
-        uniq = 4 * (4 ** order) + indices
+        prob = to_nested(prob)
+        for name in distance_columns:
+            if name in columns:
+                distance_columns[name] = to_nested(data[name])
+        uniq = 4 * (4 ** order) + np.arange(npix)
 
-    return MOC.from_valued_healpix_cells(uniq, prob, 29, cumul_to=cumulative_probability)
+    pixel_area_deg2 = np.pi / (3 * 4.0**uniq_to_level_ipix(uniq)[0]) * (180 / np.pi) ** 2
+    order_by_density = np.argsort(-prob / pixel_area_deg2)
+    in_90 = order_by_density[: np.searchsorted(np.cumsum(prob[order_by_density]), 0.9) + 1]
+    area_90 = float(pixel_area_deg2[in_90].sum())
+
+    distance = None
+    if all(values is not None for values in distance_columns.values()):
+        distance = SkymapDistance(uniq=uniq, distmu=distance_columns["DISTMU"], distsigma=distance_columns["DISTSIGMA"])
+
+    moc = MOC.from_valued_healpix_cells(uniq, prob, 29, cumul_to=cumulative_probability)
+    return moc, area_90, distance
 
 
 def plot_object_on_skymap(obj, moc):

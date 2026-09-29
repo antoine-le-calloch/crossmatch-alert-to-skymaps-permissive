@@ -11,6 +11,7 @@ from utils.skymap import get_skymap, get_alias
 from utils.kafka import read_avro, boom_consumer
 from utils.converter import fallback, str_to_bool
 from utils.gcn import prepare_gcn_payload
+from utils.distance import get_distance_info, is_distance_consistent, format_distance_info
 
 load_dotenv()
 
@@ -96,6 +97,7 @@ def crossmatch_and_publish(alert, filtered_photometry, candidate_skymaps, publis
     first_detection_jd = get_first_detection_jd(filtered_photometry)
     last_non_detection_jd = filtered_photometry[0]["jd"] if filtered_photometry[0]["flux"] is None else None
     matching_skymaps = {}
+    notes = []
     for dateobs, skymap in candidate_skymaps.items():
         if skymap.jd > first_detection_jd or (last_non_detection_jd is not None and skymap.jd < last_non_detection_jd):
             continue # Skymap is not between the last non-detection (if any) and the first detection
@@ -106,6 +108,10 @@ def crossmatch_and_publish(alert, filtered_photometry, candidate_skymaps, publis
 
         if skymap.contains(alert["ra"], alert["dec"]):
             matching_skymaps[dateobs] = skymap
+            distance_info = get_distance_info(skymap, alert, filtered_photometry)
+            if distance_info:
+                consistency = "" if is_distance_consistent(distance_info) else " (INCONSISTENT)"
+                notes.append(f"{skymap.alias}: {format_distance_info(distance_info)}{consistency}")
 
     if not matching_skymaps:
         return
@@ -118,7 +124,7 @@ def crossmatch_and_publish(alert, filtered_photometry, candidate_skymaps, publis
     if gcn:
         gcn.produce(gcn_payload)
     if slack:
-        slack.send(alert, matching_skymaps, gcn_payload)
+        slack.send(alert, matching_skymaps, gcn_payload, notes)
 
     # Add the object and matching skymaps to published_matches to avoid re-processing
     dateobs_created_at_tuple = set((dateobs, skymap.created_at) for dateobs, skymap in matching_skymaps.items())
