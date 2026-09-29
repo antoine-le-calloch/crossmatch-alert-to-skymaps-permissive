@@ -89,6 +89,45 @@ def get_filtered_photometry(alert, snr_threshold, first_detection_fallback):
     return last_non_detection + list(reversed(filtered_photometry))
 
 
+def crossmatch_and_publish(alert, filtered_photometry, candidate_skymaps, published_matches, gcn=None, slack=None):
+    """Crossmatch an alert with candidate skymaps and publish a notice for the new matches."""
+    obj_id = alert["objectId"]
+    matching_skymaps = {}
+    for dateobs, skymap in candidate_skymaps.items():
+        if not filtered_photometry[0]["jd"] <= skymap.jd <= filtered_photometry[1]["jd"]:
+            continue # Skymap is not between the last non-detection and the first detection
+
+        if obj_id in published_matches and (dateobs, skymap.created_at) in published_matches[obj_id].get("skymaps", set()):
+            log(f"Skipping already processed skymap {dateobs} for object {obj_id}")
+            continue # This skymap has already been processed for this object
+
+        if skymap.contains(alert["ra"], alert["dec"]):
+            matching_skymaps[dateobs] = skymap
+
+    if not matching_skymaps:
+        return
+
+    skymaps_string = ", ".join(skymap.name for skymap in matching_skymaps.values())
+    log(f"{obj_id} matches the following skymaps: {skymaps_string}")
+    alert["filtered_photometry"] = filtered_photometry
+    gcn_payload = prepare_gcn_payload(alert, matching_skymaps)
+
+    if gcn:
+        gcn.produce(gcn_payload)
+    if slack:
+        slack.send(alert, matching_skymaps, gcn_payload)
+
+    # Add the object and matching skymaps to published_matches to avoid re-processing
+    dateobs_created_at_tuple = set((dateobs, skymap.created_at) for dateobs, skymap in matching_skymaps.items())
+    if obj_id not in published_matches:
+        published_matches[obj_id] = {
+            "skymaps": dateobs_created_at_tuple,
+            "first_detection_jd": filtered_photometry[1]["jd"],
+        }
+    else:
+        published_matches[obj_id]["skymaps"].update(dateobs_created_at_tuple)
+
+
 def boom_gcn_pipeline(gcn=None, slack=None):
     skyportal = SkyPortal(instance=SKYPORTAL_URL, token=SKYPORTAL_API_KEY)
     cumulative_probability = 0.95
@@ -96,6 +135,7 @@ def boom_gcn_pipeline(gcn=None, slack=None):
     published_matches = {}  # {objectId: {"skymaps": set((dateobs,created_at)), "first_detection_jd": float}}
     skymaps = {} # {dateobs: Skymap}
     skipped_events = set() # {dateobs} of events already reported as not usable
+    recent_alerts = {}  # {objectId: (alert, filtered_photometry)} to crossmatch with skymaps received later
 
     check_for_gcn_events_timer = None
     heartbeat_timer = time.time()
@@ -143,8 +183,10 @@ def boom_gcn_pipeline(gcn=None, slack=None):
                             # If the localization is newer than the one we have for that dateobs, we should recompute this event
                             new_gcn_events.append(event)
 
+                    new_skymaps = {}
                     for gcn_event in new_gcn_events:
-                        skymaps[gcn_event["dateobs"]] = get_skymap(skyportal, cumulative_probability, gcn_event)
+                        new_skymaps[gcn_event["dateobs"]] = get_skymap(skyportal, cumulative_probability, gcn_event)
+                    skymaps.update(new_skymaps)
                     if new_gcn_events:
                         log(f"Fetched {len(new_gcn_events)} skymaps and created MOCs")
 
@@ -161,6 +203,15 @@ def boom_gcn_pipeline(gcn=None, slack=None):
                         if info["first_detection_jd"] < first_detection_fallback_jd:
                             log(f"Removed expired object {obj_id} from published_matches")
                             del published_matches[obj_id]
+                    for obj_id, (_, filtered_photometry) in list(recent_alerts.items()):
+                        if filtered_photometry[1]["jd"] < first_detection_fallback_jd:
+                            del recent_alerts[obj_id]
+
+                    new_skymaps = {dateobs: skymap for dateobs, skymap in new_skymaps.items() if dateobs in skymaps}
+                    if new_skymaps and recent_alerts:
+                        log(f"Crossmatching {len(recent_alerts)} recent alerts with {len(new_skymaps)} new skymaps")
+                        for alert, filtered_photometry in list(recent_alerts.values()):
+                            crossmatch_and_publish(alert, filtered_photometry, new_skymaps, published_matches, gcn, slack)
 
             # Consume new alerts passing a set of filters from Boom Kafka and crossmatch them with available skymaps
             msg = consumer.poll(timeout=30.0)
@@ -177,56 +228,22 @@ def boom_gcn_pipeline(gcn=None, slack=None):
                 log(f"Consumer error: {msg.error()}")
                 continue
 
+            alert = read_avro(msg)
+            if not any(boom_filter.get("filter_name") in BOOM_FILTERS for boom_filter in alert.get("filters", [])):
+                continue
+            log_empty_poll = True
+            new_processed_alerts += 1
+
+            filtered_photometry = get_filtered_photometry(alert, snr_threshold, fallback(FIRST_DETECTION, date_format="jd"))
+            if not filtered_photometry or len(filtered_photometry) < 2:
+                continue # The First detection is too old or the alert doesn't have any detections/non-detections
+
+            for cutout in ("cutoutScience", "cutoutTemplate", "cutoutDifference"):
+                alert.pop(cutout, None)
+            recent_alerts[alert["objectId"]] = (alert, filtered_photometry)
+
             if skymaps:
-                alert = read_avro(msg)
-
-                if not any(boom_filter.get("filter_name") in BOOM_FILTERS for boom_filter in alert.get("filters", [])):
-                    continue
-                log_empty_poll = True
-                obj_id = alert["objectId"]
-                new_processed_alerts += 1
-
-                filtered_photometry = get_filtered_photometry(alert, snr_threshold, fallback(FIRST_DETECTION, date_format="jd"))
-                if not filtered_photometry or len(filtered_photometry) < 2:
-                    continue # The First detection is too old or the alert doesn't have any detections/non-detections
-
-                matching_skymaps = {}
-                for dateobs, skymap in skymaps.items():
-                    if not filtered_photometry[0]["jd"] <= skymap.jd <= filtered_photometry[1]["jd"]:
-                        continue # Skymap is not between the last non-detection and the first detection
-
-                    if obj_id in published_matches and (dateobs, skymap.created_at) in published_matches[obj_id].get("skymaps", set()):
-                        log(f"Skipping already processed skymap {dateobs} for object {obj_id}")
-                        continue # This skymap has already been processed for this object
-
-                    if skymap.contains(alert["ra"], alert["dec"]):
-                        # If the object is in the skymap, add it to the matching_skymaps dictionary
-                        matching_skymaps[dateobs] = skymap
-
-                if matching_skymaps:
-                    # Process the crossmatch results here (e.g., send to GCN, log, etc.)
-                    skymaps_string = ", ".join(skymap.name for skymap in matching_skymaps.values())
-                    log(f"{obj_id} matches the following skymaps: {skymaps_string}")
-                    alert["filtered_photometry"] = filtered_photometry
-                    gcn_payload = prepare_gcn_payload(alert, matching_skymaps)
-
-                    # Publish the GCN notice with the alert data and matching skymaps to the GCN Kafka topic
-                    if gcn:
-                        gcn.produce(gcn_payload)
-
-                    # Send the GCN notice with the alert data and matching skymaps to Slack
-                    if slack:
-                        slack.send(alert, matching_skymaps, gcn_payload)
-
-                    # Add the object and matching skymaps to published_matches to avoid re-processing
-                    dateobs_created_at_tuple = set((dateobs, skymap.created_at) for dateobs, skymap in matching_skymaps.items())
-                    if obj_id not in published_matches:
-                        published_matches[obj_id] = {
-                            "skymaps": dateobs_created_at_tuple,
-                            "first_detection_jd": filtered_photometry[1]["jd"],
-                        }
-                    else:
-                        published_matches[obj_id]["skymaps"].update(dateobs_created_at_tuple)
+                crossmatch_and_publish(alert, filtered_photometry, skymaps, published_matches, gcn, slack)
 
         except APIError as e:
             log(e)
