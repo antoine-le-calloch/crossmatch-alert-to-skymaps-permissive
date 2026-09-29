@@ -195,6 +195,7 @@ class SkyPortal:
         - SVOM (any notice)
         - Einstein Probe (any notice)
         - Fermi (< 1000 sq. deg.)
+        - Swift GRB (< 1000 sq. deg.)
 
         Parameters
         ----------
@@ -204,7 +205,7 @@ class SkyPortal:
         Returns
         -------
         list
-            GCN events
+            GCN events, deduplicated by dateobs
         """
         payload = {
             "startDate": dateobs,
@@ -228,7 +229,14 @@ class SkyPortal:
             {**payload,"gcnTagKeep": "Fermi","localizationTagKeep": "< 1000 sq. deg."},
             "events"
         )
-        return gcn_events
+
+        gcn_events += self.fetch_all_pages(
+            "/api/gcn_event",
+            {**payload, "gcnTagKeep": "SWIFT", "gcnTagRemove": "Not GRB", "localizationTagKeep": "< 1000 sq. deg."},
+            "events"
+        )
+
+        return list({event["dateobs"]: event for event in gcn_events}.values())
 
     def download_localization(self, dateobs, localization_name):
         """

@@ -78,6 +78,19 @@ class Skymap:
         return self.moc.contains_lonlat(ra * u.deg, dec * u.deg)
 
 
+def get_alias(event):
+    """Return the "instrument#id" alias of a SkyPortal GCN event, or None if it has none.
+
+    Swift events have no such alias in SkyPortal, so it is built from their trigger_id.
+    """
+    alias = next((a for a in event.get("aliases") or [] if "#" in a), None)
+    if alias:
+        return alias
+    if event.get("trigger_id") and "SWIFT" in (event.get("tags") or []):
+        return f"SWIFT#{event['trigger_id']}"
+    return None
+
+
 def get_skymap(skyportal, cumulative_probability, event):
     """Build a Skymap for a SkyPortal GCN event.
 
@@ -91,7 +104,7 @@ def get_skymap(skyportal, cumulative_probability, event):
     moc = get_moc_from_fits(bytes_io, cumulative_probability)
     return Skymap(
         dateobs=event["dateobs"],
-        alias=next((a for a in event["aliases"] if "#" in a), "No aliases"), # Use the first alias that contains "#"
+        alias=get_alias(event) or "No aliases",
         moc=moc,
         created_at=localization["created_at"],
         tags=event.get("tags", [])

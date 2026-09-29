@@ -7,7 +7,7 @@ from dotenv import load_dotenv
 
 from utils.api import SkyPortal, APIError
 from utils.logger import log, RED, ENDC, YELLOW
-from utils.skymap import get_skymap
+from utils.skymap import get_skymap, get_alias
 from utils.kafka import read_avro, boom_consumer
 from utils.converter import fallback, str_to_bool
 from utils.gcn import prepare_gcn_payload
@@ -124,7 +124,7 @@ def boom_gcn_pipeline(gcn=None, slack=None):
                     # Check for new GCN events or new localizations for existing events with "< 1000 sq. deg." tag
                     new_gcn_events = []
                     for event in skyportal.get_gcn_events(fallback(GCN)):
-                        if not any("#" in alias for alias in event.get("aliases") or []):
+                        if not get_alias(event):
                             if event["dateobs"] not in skipped_events:
                                 skipped_events.add(event["dateobs"])
                                 log(f"Skipping GCN event {event['dateobs']} due to bad aliases: {event.get('aliases')}")
