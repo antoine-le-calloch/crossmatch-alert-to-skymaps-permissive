@@ -201,6 +201,8 @@ def read_skymap_fits(bytes_io, cumulative_probability):
             return reordered
 
         prob = to_nested(prob)
+        if prob_col == "PROBDENSITY":
+            prob = prob * 4 * np.pi / npix
         for name in distance_columns:
             if name in columns:
                 distance_columns[name] = to_nested(data[name])
