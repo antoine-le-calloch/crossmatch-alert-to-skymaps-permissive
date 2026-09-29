@@ -199,10 +199,10 @@ def boom_gcn_pipeline(gcn=None, slack=None):
 
                     new_skymaps = {}
                     for gcn_event in new_gcn_events:
-                        new_skymaps[gcn_event["dateobs"]] = get_skymap(skyportal, cumulative_probability, gcn_event)
+                        skymap = get_skymap(skyportal, cumulative_probability, gcn_event)
+                        new_skymaps[gcn_event["dateobs"]] = skymap
+                        log(f"Fetched skymap {skymap.name} and created its MOC (90% area: {skymap.area_90:.0f} sq. deg.)")
                     skymaps.update(new_skymaps)
-                    if new_gcn_events:
-                        log(f"Fetched {len(new_gcn_events)} skymaps and created MOCs")
 
                     # Clean up old skymaps (GCN events older than fallback)
                     gcn_fallback_iso = fallback(GCN, date_format="iso")[:19]
