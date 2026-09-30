@@ -12,6 +12,7 @@ from utils.kafka import read_avro, boom_consumer
 from utils.converter import fallback, str_to_bool
 from utils.gcn import prepare_gcn_payload
 from utils.distance import get_distance_info, is_distance_consistent, format_distance_info
+from utils.gw_alerts import get_gw_alert_listener
 
 load_dotenv()
 
@@ -26,6 +27,7 @@ FIRST_DETECTION = 24*7  # hours for first detection fallback
 SLEEP_TIME = 20 # seconds between each loop
 HEARTBEAT_INTERVAL = 120 # seconds between each heartbeat log
 MAX_GW_AREA_90 = 5000 # sq. deg., larger GW skymaps are ignored
+NS_PROBABILITY_THRESHOLD = 0.1 # minimum P(BNS) + P(NSBH) of a GW event
 
 
 def get_all_photometry(alert):
@@ -158,6 +160,7 @@ def boom_gcn_pipeline(gcn=None, slack=None):
 
     consumer = boom_consumer()
     log(f"Listening for alerts passing the following Boom filters: {BOOM_FILTERS}")
+    gw_alerts = get_gw_alert_listener(GCN)
 
     while True:
         if time.time() - heartbeat_timer >= HEARTBEAT_INTERVAL:
@@ -170,13 +173,23 @@ def boom_gcn_pipeline(gcn=None, slack=None):
             if not check_for_gcn_events_timer or time.time() - check_for_gcn_events_timer >= SLEEP_TIME:
                 check_for_gcn_events_timer = time.time() # reset timer
 
+                gcn_events = []
+                if gw_alerts:
+                    gcn_fallback_dateobs = fallback(GCN, date_format="iso")[:19]
+                    gw_alerts.poll(gcn_fallback_dateobs)
+                    gcn_events += gw_alerts.get_events(gcn_fallback_dateobs, NS_PROBABILITY_THRESHOLD)
+
                 # Check if SkyPortal is available
-                if not skyportal.ping():
-                    log(f"{YELLOW}SkyPortal API is not available, keeping the skymaps already fetched{ENDC}")
+                skyportal_available = skyportal.ping()
+                if skyportal_available:
+                    gcn_events += skyportal.get_gcn_events(fallback(GCN), NS_PROBABILITY_THRESHOLD, include_gw=gw_alerts is None)
                 else:
+                    log(f"{YELLOW}SkyPortal API is not available, keeping the skymaps already fetched{ENDC}")
+
+                if skyportal_available or gw_alerts:
                     # Check for new GCN events or new localizations for existing events (GW of any size, others with "< 1000 sq. deg." tag)
                     new_gcn_events = []
-                    for event in skyportal.get_gcn_events(fallback(GCN), ns_probability_threshold=0.1):
+                    for event in gcn_events:
                         if not get_alias(event):
                             if event["dateobs"] not in skipped_events:
                                 skipped_events.add(event["dateobs"])
