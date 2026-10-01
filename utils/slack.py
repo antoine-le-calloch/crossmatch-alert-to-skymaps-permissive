@@ -2,14 +2,29 @@ import io
 import json
 import os
 import time
+import urllib.error
 
 from dotenv import load_dotenv
 from slack_sdk import WebClient
+from slack_sdk.errors import SlackApiError
 from datetime import datetime, UTC
 
+from utils.logger import log, YELLOW, ENDC
 from utils.skymap import plot_object_on_skymap
 
 load_dotenv()
+
+UPLOAD_ATTEMPTS = 3
+UPLOAD_RETRY_DELAY = 10  # seconds, doubled after each failed attempt
+
+
+def is_transient(error):
+    """Whether a Slack upload error is worth retrying: server errors, rate limits, timeouts and connection errors."""
+    if isinstance(error, urllib.error.HTTPError):
+        return error.code >= 500 or error.code == 429
+    if isinstance(error, SlackApiError):
+        return error.response.status_code >= 500 or error.response.status_code == 429
+    return isinstance(error, (urllib.error.URLError, TimeoutError, ConnectionError))
 
 
 class SlackNotifier:
@@ -48,11 +63,23 @@ class SlackNotifier:
                 self.client.chat_delete(channel=self.channel_id, ts=message["ts"])
                 time.sleep(1.3)  # To avoid hitting rate limits
 
+    def _upload(self, content, **kwargs):
+        """files_upload_v2 in the channel, retried on transient errors."""
+        for attempt in range(1, UPLOAD_ATTEMPTS + 1):
+            try:
+                return self.client.files_upload_v2(channel=self.channel_id, file=io.BytesIO(content), **kwargs)
+            except Exception as e:
+                if attempt == UPLOAD_ATTEMPTS or not is_transient(e):
+                    raise
+                delay = UPLOAD_RETRY_DELAY * 2 ** (attempt - 1)
+                log(f"{YELLOW}Slack upload failed ({e}), retrying in {delay} seconds{ENDC}")
+                time.sleep(delay)
+
     def send(self, obj, matching_skymaps, gcn_payload, notes=None):
         """Send a message to Slack with the object details, optional notes and crossmatch plots."""
         notes_text = "".join(f"*Distance:* {note}\n" for note in notes or [])
-        self.client.files_upload_v2(
-            channel=self.channel_id,
+        self._upload(
+            json.dumps(gcn_payload, indent=2, ensure_ascii=False).encode("utf-8"),
             initial_comment=(
                 f"*New object in Skymaps localization*\n"
                 f"*Date:* {datetime.now(UTC).replace(microsecond=0).isoformat()} UTC\n"
@@ -61,13 +88,11 @@ class SlackNotifier:
                 f"*GCN notice payload:*"
             ),
             title=f"gcn_notice_payload_{obj['objectId']}_{'_'.join([skymap.alias for skymap in matching_skymaps.values()])}.json",
-            file=io.BytesIO(json.dumps(gcn_payload, indent=2, ensure_ascii=False).encode("utf-8")),
         )
 
         for dateobs, skymap in matching_skymaps.items():
-            self.client.files_upload_v2(
-                channel=self.channel_id,
+            self._upload(
+                plot_object_on_skymap(obj, skymap).getvalue(),
                 filename=f"{obj['objectId']}_{skymap.alias}.png",
                 initial_comment=f"*Alias:* <{self.skyportal_url}/gcn_events/{dateobs}|{skymap.alias}>",
-                file=plot_object_on_skymap(obj, skymap),
             )
