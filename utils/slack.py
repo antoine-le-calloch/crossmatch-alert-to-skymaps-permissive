@@ -9,7 +9,7 @@ from slack_sdk import WebClient
 from slack_sdk.errors import SlackApiError
 from datetime import datetime, UTC
 
-from utils.logger import log, YELLOW, ENDC
+from utils.logger import log, RED, YELLOW, ENDC
 from utils.skymap import plot_object_on_skymap
 
 load_dotenv()
@@ -76,7 +76,10 @@ class SlackNotifier:
                 time.sleep(delay)
 
     def send(self, obj, matching_skymaps, gcn_payload, notes=None):
-        """Send a message to Slack with the object details, optional notes and crossmatch plots."""
+        """
+        Send a message to Slack with the object details, optional notes and crossmatch plots.
+        A plot that fails to upload is only logged, so that the detection already posted is not published again.
+        """
         notes_text = "".join(f"*Distance:* {note}\n" for note in notes or [])
         self._upload(
             json.dumps(gcn_payload, indent=2, ensure_ascii=False).encode("utf-8"),
@@ -91,8 +94,11 @@ class SlackNotifier:
         )
 
         for dateobs, skymap in matching_skymaps.items():
-            self._upload(
-                plot_object_on_skymap(obj, skymap).getvalue(),
-                filename=f"{obj['objectId']}_{skymap.alias}.png",
-                initial_comment=f"*Alias:* <{self.skyportal_url}/gcn_events/{dateobs}|{skymap.alias}>",
-            )
+            try:
+                self._upload(
+                    plot_object_on_skymap(obj, skymap).getvalue(),
+                    filename=f"{obj['objectId']}_{skymap.alias}.png",
+                    initial_comment=f"*Alias:* <{self.skyportal_url}/gcn_events/{dateobs}|{skymap.alias}>",
+                )
+            except Exception as e:
+                log(f"{RED}Could not upload the {skymap.alias} plot of {obj['objectId']} to Slack, its detection is posted without it:{ENDC} {e}")
