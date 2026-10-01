@@ -12,6 +12,7 @@ from utils.kafka import read_avro, boom_consumer
 from utils.converter import fallback, str_to_bool
 from utils.gcn import prepare_gcn_payload
 from utils.distance import get_distance_info, is_distance_consistent, format_distance_info
+from utils.published_matches import load_published_matches, save_published_matches
 
 load_dotenv()
 
@@ -139,13 +140,16 @@ def crossmatch_and_publish(alert, filtered_photometry, candidate_skymaps, publis
         }
     else:
         published_matches[obj_id]["skymaps"].update(dateobs_created_at_tuple)
+    save_published_matches(published_matches)
 
 
 def boom_gcn_pipeline(gcn=None, slack=None):
     skyportal = SkyPortal(instance=SKYPORTAL_URL, token=SKYPORTAL_API_KEY)
     cumulative_probability = 0.95
     snr_threshold = 3.0
-    published_matches = {}  # {objectId: {"skymaps": set((dateobs,created_at)), "first_detection_jd": float}}
+    published_matches = load_published_matches()  # {objectId: {"skymaps": set((dateobs,created_at)), "first_detection_jd": float}}
+    if published_matches:
+        log(f"Loaded {len(published_matches)} objects already published by the previous run")
     skymaps = {} # {dateobs: Skymap}
     skipped_events = set() # {dateobs} of events already reported as not usable
     recent_alerts = {}  # {objectId: (alert, filtered_photometry)} to crossmatch with skymaps received later
@@ -213,10 +217,12 @@ def boom_gcn_pipeline(gcn=None, slack=None):
                             del skymaps[dateobs]
 
                     first_detection_fallback_jd = fallback(FIRST_DETECTION, date_format="jd")
-                    for obj_id, info in list(published_matches.items()):
-                        if info["first_detection_jd"] < first_detection_fallback_jd:
-                            log(f"Removed expired object {obj_id} from published_matches")
-                            del published_matches[obj_id]
+                    expired_objects = [obj_id for obj_id, info in published_matches.items() if info["first_detection_jd"] < first_detection_fallback_jd]
+                    for obj_id in expired_objects:
+                        log(f"Removed expired object {obj_id} from published_matches")
+                        del published_matches[obj_id]
+                    if expired_objects:
+                        save_published_matches(published_matches)
                     for obj_id, (_, filtered_photometry) in list(recent_alerts.items()):
                         if get_first_detection_jd(filtered_photometry) < first_detection_fallback_jd:
                             del recent_alerts[obj_id]

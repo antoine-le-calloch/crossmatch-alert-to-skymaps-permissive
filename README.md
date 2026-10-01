@@ -20,6 +20,7 @@ This service contributes to the BOOM GCN Notices stream: it crossmatches candida
 
 - Polls SkyPortal for recent GCN events (GW skymaps of any size, other events with a `< 1000 sq. deg.` localization) and builds MOCs from their skymaps.
 - Keeps the recent alerts in memory and crossmatches them again when a new or updated skymap arrives.
+- Saves the published matches in `published_matches.json`, so that replaying the Kafka topic after a restart does not publish them again.
 - Ignores GW skymaps whose 90% area is above 5000 sq. deg.
 - For GW skymaps, compares the alert with the distance along its line of sight (host galaxy distance from the BOOM `host_galaxy` field, peak absolute magnitude) and adds it to the Slack message, without dropping any match.
 - Consumes alerts from configured BOOM Kafka filters, filters photometry (SNR, detections / last non-detection), and checks spatial and temporal containment against each skymap.
