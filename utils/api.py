@@ -287,7 +287,7 @@ class SkyPortal:
             return_response=True
         )
         if response.status_code != 200:
-            raise ValueError(f"Error fetching localization: {response.text}")
+            raise ValueError(f"Error fetching localization: HTTP {response.status_code} {response.reason}")
         return io.BytesIO(response.content) # return a BytesIO object containing the FITS file
 
     def get_objects(self, payload):
