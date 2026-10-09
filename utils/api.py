@@ -158,7 +158,7 @@ class SkyPortal:
         try:
             body = response.json()
         except Exception:
-            raise APIError("Server error." if "server error" in response.text.lower() else response.text)
+            raise APIError(f"HTTP {response.status_code} {response.reason}")
 
         if response.status_code != 200:
             raise APIError(body.get("message", response.text))
