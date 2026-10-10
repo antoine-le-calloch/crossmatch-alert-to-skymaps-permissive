@@ -213,7 +213,7 @@ class SkyPortal:
             self.ns_probabilities[key] = (latest.get("BNS") or 0) + (latest.get("NSBH") or 0)
         return self.ns_probabilities[key]
 
-    def get_gcn_events(self, dateobs, ns_probability_threshold=0.5):
+    def get_gcn_events(self, dateobs, ns_probability_threshold=0.5, include_gw=True):
         """
         Get GCN events from SkyPortal filtered by dateobs:
         - GW with P(BNS) + P(NSBH) >= ns_probability_threshold (any size, not retracted, not MLy)
@@ -228,6 +228,8 @@ class SkyPortal:
             Date of observation to filter GCN events from
         ns_probability_threshold : float, optional
             Minimum P(BNS) + P(NSBH) of the most recent notice for a GW event to be kept
+        include_gw : bool, optional
+            If False, skip the GW events (when they are received directly from GCN)
 
         Returns
         -------
@@ -239,14 +241,16 @@ class SkyPortal:
             "excludeNoticeContent": True,
         }
 
-        gw_events = self.fetch_all_pages(
-            "/api/gcn_event",
-            {**payload, "gcnTagKeep": "GW", "gcnTagRemove": "retracted,MLy"},
-            "events"
-        )
-        gcn_events = [event for event in gw_events if self.get_ns_probability(event) >= ns_probability_threshold]
-        gw_dateobs = {event["dateobs"] for event in gw_events}
-        self.ns_probabilities = {k: v for k, v in self.ns_probabilities.items() if k[0] in gw_dateobs}
+        gcn_events = []
+        if include_gw:
+            gw_events = self.fetch_all_pages(
+                "/api/gcn_event",
+                {**payload, "gcnTagKeep": "GW", "gcnTagRemove": "retracted,MLy"},
+                "events"
+            )
+            gcn_events = [event for event in gw_events if self.get_ns_probability(event) >= ns_probability_threshold]
+            gw_dateobs = {event["dateobs"] for event in gw_events}
+            self.ns_probabilities = {k: v for k, v in self.ns_probabilities.items() if k[0] in gw_dateobs}
 
         gcn_events += self.fetch_all_pages(
             "/api/gcn_event",
