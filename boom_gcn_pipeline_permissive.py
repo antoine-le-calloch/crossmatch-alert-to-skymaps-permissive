@@ -71,11 +71,8 @@ def get_filtered_photometry(alert, snr_threshold, first_detection_fallback):
 
         snr = phot["flux"] / phot["flux_err"] if phot["flux"] else 0
         if snr >= snr_threshold:  # Detection
-            if phot["jd"] < first_detection_fallback:
-                if is_forced and snr < 5:
-                    continue # A low SNR forced photometry point is not enough to call the object too old
-                # A detection older than first_detection_fallback means the object is too old, skip it
-                return None
+            if phot["jd"] < first_detection_fallback and not (is_forced and snr < 5):
+                return None # Too old, unless it is only a low SNR forced photometry point
             last_non_detection = []  # Reset last non-detection as we found a detection
             filtered_photometry.append(phot)
         elif not last_non_detection:
