@@ -7,9 +7,11 @@ from datetime import datetime, timedelta, UTC
 # so we need to adjust the zero point accordingly.
 BOOM_ZTF_FLUX_ZP = 23.9 + 2.5 * math.log10(1e9)
 BOOM_LSST_FLUX_ZP = 8.9 + 2.5 * math.log10(1e9)
+BOOM_DECAM_FLUX_ZP = 8.9 + 2.5 * math.log10(1e9)
 SURVEYS = {
     "ZTF": {"telescope": "Palomar 1.2m Oschin", "instrument": "ZTF", "zp": BOOM_ZTF_FLUX_ZP},
     "LSST": {"telescope": "Vera C. Rubin Observatory Simonyi Survey Telescope", "instrument": "LSSTCam", "zp": BOOM_LSST_FLUX_ZP},
+    "DECAM": {"telescope": "CTIO Blanco 4m", "instrument": "DECam", "zp": BOOM_DECAM_FLUX_ZP},
 }
 _FACTOR = 2.5 / math.log(10)
 
