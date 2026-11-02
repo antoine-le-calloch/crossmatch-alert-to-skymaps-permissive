@@ -126,15 +126,19 @@ def get_alias(event):
 
 
 def get_skymap(skyportal, cumulative_probability, event):
-    """Build a Skymap for a SkyPortal GCN event.
+    """Build a Skymap for a GCN event.
 
-    Downloads the event's localization from SkyPortal, extracts the MOC at the
+    Uses the FITS file of the event's localization when it came with it (GW alerts
+    received from GCN), or downloads it from SkyPortal, extracts the MOC at the
     given cumulative_probability threshold, and wraps it with identifying metadata.
     """
     localization = event["localization"]
-    bytes_io = skyportal.download_localization(
-        localization["dateobs"], localization["localization_name"]
-    )
+    if "fits" in localization:
+        bytes_io = io.BytesIO(localization["fits"])
+    else:
+        bytes_io = skyportal.download_localization(
+            localization["dateobs"], localization["localization_name"]
+        )
     moc, area_90, distance = read_skymap_fits(bytes_io, cumulative_probability)
     return Skymap(
         dateobs=event["dateobs"],
@@ -154,21 +158,19 @@ def uniq_to_level_ipix(uniq):
     return levels, uniq - 4 * 4**levels
 
 
-def read_skymap_fits(bytes_io, cumulative_probability):
+def read_skymap_probabilities(bytes_io):
     """Read a FITS HEALPix skymap.
 
     Parameters
     ----------
     bytes_io : io.BytesIO
         A BytesIO object containing the FITS file data.
-    cumulative_probability : float
-        The cumulative probability threshold for the MOC.
 
     Returns
     -------
     tuple
-        The MOC at cumulative_probability, the 90% area in square degrees,
-        and the SkymapDistance (None if the skymap has no distance columns).
+        The NESTED UNIQ indices, the probability of each pixel, and the DISTMU and
+        DISTSIGMA columns ({name: None} if the skymap has no distance).
     """
     with fits.open(bytes_io) as hdul:
         data = hdul[1].data
@@ -208,10 +210,35 @@ def read_skymap_fits(bytes_io, cumulative_probability):
                 distance_columns[name] = to_nested(data[name])
         uniq = 4 * (4 ** order) + np.arange(npix)
 
+    return uniq, prob, distance_columns
+
+
+def get_area_90(uniq, prob):
+    """Area of the 90% credible region, in square degrees."""
     pixel_area_deg2 = np.pi / (3 * 4.0**uniq_to_level_ipix(uniq)[0]) * (180 / np.pi) ** 2
     order_by_density = np.argsort(-prob / pixel_area_deg2)
     in_90 = order_by_density[: np.searchsorted(np.cumsum(prob[order_by_density]), 0.9) + 1]
-    area_90 = float(pixel_area_deg2[in_90].sum())
+    return float(pixel_area_deg2[in_90].sum())
+
+
+def read_skymap_fits(bytes_io, cumulative_probability):
+    """Read a FITS HEALPix skymap.
+
+    Parameters
+    ----------
+    bytes_io : io.BytesIO
+        A BytesIO object containing the FITS file data.
+    cumulative_probability : float
+        The cumulative probability threshold for the MOC.
+
+    Returns
+    -------
+    tuple
+        The MOC at cumulative_probability, the 90% area in square degrees,
+        and the SkymapDistance (None if the skymap has no distance columns).
+    """
+    uniq, prob, distance_columns = read_skymap_probabilities(bytes_io)
+    area_90 = get_area_90(uniq, prob)
 
     distance = None
     if all(values is not None for values in distance_columns.values()):
