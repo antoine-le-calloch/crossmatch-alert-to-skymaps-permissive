@@ -64,6 +64,19 @@ Edit the `.env` file to set your configuration.
 - `SLACK_BOT_TOKEN`: bot token.
 - `SLACK_CHANNEL_NAME`: channel to post in.
 
+**Claude review (optional)**
+- `CLAUDE_REVIEW`: set to `true` to have Claude Code analyse each detection posted on Slack: its summary, classes with their probability, priority and decisive reason are added to the message when ready, and its detailed reasons go in the thread. Requires `NOTIFY_SLACK`.
+- Claude runs on the subscription of the account logged in with `claude` on the machine (or `CLAUDE_CODE_OAUTH_TOKEN` from `claude setup-token`). `ANTHROPIC_API_KEY` is never passed to it, so it never uses the paid API.
+- `CLAUDE_BIN`, `CLAUDE_REVIEW_MODEL`, `CLAUDE_REVIEW_TIMEOUT` (seconds), `CLAUDE_THREAD_POLL_INTERVAL` (seconds between checks of the analysis threads), `CLAUDE_REVIEW_WORKERS` (parallel reviews).
+- `BOOM_MONGO_URI`: BOOM MongoDB Claude reads, with a read-only user (e.g. `mongodb://readonly:...@localhost:27017/boom?authSource=boom` on the machine running BOOM).
+
+Claude runs headless (`claude --print`) in a background thread, with read-only tools only: `tools/fritz.py` (GET on the SkyPortal API), `tools/boom.py` (object summary, find, cone search, aggregations and cutouts on an allowlist of BOOM alert and catalog collections) and web search, with WebFetch on GCN, TNS, SIMBAD, VizieR, NED and the Minor Planet Center. The analysis method is in `prompts/claude_review.md`.
+
+People can ask questions in the Slack thread of a detection: every `CLAUDE_THREAD_POLL_INTERVAL` seconds the pipeline looks for messages without a reply in the threads of the analyses of the last 14 days, resumes the Claude session that wrote the analysis (kept in `reviews/`, with its tool results) and answers in the thread. If that session is gone, Claude starts a new one from the text of the analysis. To tune it on a past detection without posting on Slack:
+```bash
+python -m utils.claude_review ZTF26aaaaaaa 2026-09-28T00:31:17
+```
+
 The BOOM GCN schema and example JSON messages are available in the [GCN Schema project](https://github.com/nasa-gcn/gcn-schema/tree/main/gcn/notices/boom).
 
 ## Running the Service
