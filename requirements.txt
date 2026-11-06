@@ -13,4 +13,3 @@ gcn_kafka
 jsonschema
 referencing
 matplotlib
-pymongo

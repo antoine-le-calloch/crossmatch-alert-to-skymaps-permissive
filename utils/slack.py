@@ -93,14 +93,6 @@ class SlackNotifier:
         """Post a text message in the channel, return its timestamp."""
         return self.client.chat_postMessage(channel=self.channel_id, text=text, unfurl_links=False)["ts"]
 
-    def reply(self, thread_ts, text):
-        """Post a text message in the thread of a message."""
-        self.client.chat_postMessage(channel=self.channel_id, thread_ts=thread_ts, text=text, unfurl_links=False)
-
-    def update(self, ts, text):
-        """Replace the text of a message, keeping its images."""
-        self.client.chat_update(channel=self.channel_id, ts=ts, text=text)
-
     def header(self, obj, matching_skymaps):
         """Object, matching events and a one line summary of the detections."""
         events = ", ".join(
@@ -110,12 +102,12 @@ class SlackNotifier:
         )
         return f"*<{self.skyportal_url}/source/{obj['objectId']}|{obj['objectId']}>* in {events}\n{photometry_summary(obj)}"
 
-    def send(self, obj, matching_skymaps, pending_review=False):
+    def send(self, obj, matching_skymaps):
         """
         Post the detection with its skymap plots and return the timestamp of the message, None if Slack did not give it.
         A plot that fails is only logged, so that the detection is posted without it rather than not at all.
         """
-        text = self.header(obj, matching_skymaps) + ("\n_Analysis running..._" if pending_review else "")
+        text = self.header(obj, matching_skymaps)
         plots = []
         for skymap in matching_skymaps.values():
             try:

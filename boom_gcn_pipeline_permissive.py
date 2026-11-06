@@ -22,7 +22,6 @@ SKYPORTAL_API_KEY = os.getenv("SKYPORTAL_API_KEY")
 BOOM_FILTERS = os.getenv("BOOM_KAFKA_FILTERS").split(",")
 NOTIFY_GCN = str_to_bool(os.getenv("NOTIFY_GCN"), default=False)
 NOTIFY_SLACK = str_to_bool(os.getenv("NOTIFY_SLACK"), default=False)
-CLAUDE_REVIEW = str_to_bool(os.getenv("CLAUDE_REVIEW"), default=False)
 
 GCN = 24*8  # hours for GCN fallback
 FIRST_DETECTION = 24*7  # hours for first detection fallback
@@ -93,7 +92,7 @@ def get_first_detection_jd(filtered_photometry):
     return next(phot["jd"] for phot in filtered_photometry if phot["flux"] is not None)
 
 
-def crossmatch_and_publish(alert, filtered_photometry, candidate_skymaps, published_matches, gcn=None, slack=None, claude=None):
+def crossmatch_and_publish(alert, filtered_photometry, candidate_skymaps, published_matches, gcn=None, slack=None):
     """Crossmatch an alert with candidate skymaps and publish a notice for the new matches."""
     obj_id = alert["objectId"]
     first_detection_jd = get_first_detection_jd(filtered_photometry)
@@ -129,11 +128,8 @@ def crossmatch_and_publish(alert, filtered_photometry, candidate_skymaps, publis
     if gcn:
         gcn.produce(gcn_payload)
     if slack:
-        ts = slack.send(alert, matching_skymaps, pending_review=claude is not None)
-        if claude:
-            claude.submit(alert, matching_skymaps, gcn_payload, notes, ts)
-        else:
-            slack.send_details(ts, alert, matching_skymaps, gcn_payload, notes)
+        ts = slack.send(alert, matching_skymaps)
+        slack.send_details(ts, alert, matching_skymaps, gcn_payload, notes)
 
     # Add the object and matching skymaps to published_matches to avoid re-processing
     dateobs_created_at_tuple = set((dateobs, skymap.created_at) for dateobs, skymap in matching_skymaps.items())
@@ -147,7 +143,7 @@ def crossmatch_and_publish(alert, filtered_photometry, candidate_skymaps, publis
     save_published_matches(published_matches)
 
 
-def boom_gcn_pipeline(gcn=None, slack=None, claude=None):
+def boom_gcn_pipeline(gcn=None, slack=None):
     skyportal = SkyPortal(instance=SKYPORTAL_URL, token=SKYPORTAL_API_KEY)
     cumulative_probability = 0.95
     snr_threshold = 3.0
@@ -250,7 +246,7 @@ def boom_gcn_pipeline(gcn=None, slack=None, claude=None):
                     if new_skymaps and recent_alerts:
                         log(f"Crossmatching {len(recent_alerts)} recent alerts with {len(new_skymaps)} new skymaps")
                         for alert, filtered_photometry in list(recent_alerts.values()):
-                            crossmatch_and_publish(alert, filtered_photometry, new_skymaps, published_matches, gcn, slack, claude)
+                            crossmatch_and_publish(alert, filtered_photometry, new_skymaps, published_matches, gcn, slack)
 
             # Consume new alerts passing a set of filters from Boom Kafka and crossmatch them with available skymaps
             msg = consumer.poll(timeout=30.0)
@@ -282,7 +278,7 @@ def boom_gcn_pipeline(gcn=None, slack=None, claude=None):
             recent_alerts[alert["objectId"]] = (alert, filtered_photometry)
 
             if skymaps:
-                crossmatch_and_publish(alert, filtered_photometry, skymaps, published_matches, gcn, slack, claude)
+                crossmatch_and_publish(alert, filtered_photometry, skymaps, published_matches, gcn, slack)
 
         except APIError as e:
             log(e)
@@ -336,13 +332,6 @@ if __name__ == "__main__":
         if args.clean_slack:
             slack_notifier.delete_all_bot_messages()
 
-    claude_reviewer = None
-    if CLAUDE_REVIEW:
-        if not slack_notifier:
-            raise SystemExit(f"{RED}CLAUDE_REVIEW needs NOTIFY_SLACK to post its analysis of each detection.{ENDC}")
-        from utils.claude_review import ClaudeReviewer
-        claude_reviewer = ClaudeReviewer(slack_notifier)
-
     gcn_notifier = None
     log(f"{YELLOW}GCN notifier is disabled in this repo: private ZTF alerts must not be republished to public GCN streams.{ENDC}")
     # if NOTIFY_GCN:
@@ -352,4 +341,4 @@ if __name__ == "__main__":
     if not gcn_notifier and not slack_notifier:
         raise SystemExit(f"{RED}No notifier enabled. Please enable at least one of GCN or Slack notifications.{ENDC}")
 
-    boom_gcn_pipeline(gcn=gcn_notifier, slack=slack_notifier, claude=claude_reviewer)
+    boom_gcn_pipeline(gcn=gcn_notifier, slack=slack_notifier)
