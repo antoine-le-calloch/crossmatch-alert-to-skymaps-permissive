@@ -128,7 +128,8 @@ def crossmatch_and_publish(alert, filtered_photometry, candidate_skymaps, publis
     if gcn:
         gcn.produce(gcn_payload)
     if slack:
-        slack.send(alert, matching_skymaps, gcn_payload, notes)
+        ts = slack.send(alert, matching_skymaps)
+        slack.send_details(ts, alert, matching_skymaps, gcn_payload, notes)
 
     # Add the object and matching skymaps to published_matches to avoid re-processing
     dateobs_created_at_tuple = set((dateobs, skymap.created_at) for dateobs, skymap in matching_skymaps.items())
