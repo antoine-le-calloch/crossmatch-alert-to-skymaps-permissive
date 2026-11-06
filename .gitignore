@@ -2,3 +2,4 @@
 .env
 __pycache__/
 published_matches.json
+reviews/

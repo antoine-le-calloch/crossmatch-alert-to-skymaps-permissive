@@ -22,9 +22,9 @@ This service contributes to the BOOM GCN Notices stream: it crossmatches candida
 - Keeps the recent alerts in memory and crossmatches them again when a new or updated skymap arrives.
 - Saves the published matches in `published_matches.json`, so that replaying the Kafka topic after a restart does not publish them again.
 - Ignores GW skymaps whose 90% area is above 5000 sq. deg.
-- For GW skymaps, compares the alert with the distance along its line of sight (host galaxy distance from the BOOM `host_galaxy` field, peak absolute magnitude) and adds it to the Slack message, without dropping any match.
+- For GW skymaps, compares the alert with the distance along its line of sight (host galaxy distance from the BOOM `host_galaxy` field, peak absolute magnitude) and adds it to the Slack thread of the detection, without dropping any match.
 - Consumes alerts from configured BOOM Kafka filters, filters photometry (SNR, detections / last non-detection), and checks spatial and temporal containment against each skymap.
-- For every match, produces a BOOM GCN Notice to GCN Kafka (test or production). A Slack summary with the payload JSON and a PNG of the object over each matching skymap MOC can optionally be sent.
+- For every match, produces a BOOM GCN Notice to GCN Kafka (test or production). A Slack message can optionally be sent: the object and event links, its detections and a PNG of the object over each matching skymap MOC, with the distance check and the payload JSON in its thread.
 - Emits periodic heartbeats on the `gcn.notices.boom.heartbeat` topic.
 
 A `display_skymaps(obj, skymaps, plot=False)` helper is also available in `utils/skymap.py` to log (and optionally plot with matplotlib) the skymaps that match a given object.
@@ -63,6 +63,19 @@ Edit the `.env` file to set your configuration.
 - `NOTIFY_SLACK`: set to `true` to enable Slack notifications.
 - `SLACK_BOT_TOKEN`: bot token.
 - `SLACK_CHANNEL_NAME`: channel to post in.
+
+**Claude review (optional)**
+- `CLAUDE_REVIEW`: set to `true` to have Claude Code analyse each detection posted on Slack: its summary, classes with their probability, priority and decisive reason are added to the message when ready, and its detailed reasons go in the thread. Requires `NOTIFY_SLACK`.
+- Claude runs on the subscription of the account logged in with `claude` on the machine (or `CLAUDE_CODE_OAUTH_TOKEN` from `claude setup-token`). `ANTHROPIC_API_KEY` is never passed to it, so it never uses the paid API.
+- `CLAUDE_BIN`, `CLAUDE_REVIEW_MODEL`, `CLAUDE_REVIEW_TIMEOUT` (seconds), `CLAUDE_THREAD_POLL_INTERVAL` (seconds between checks of the analysis threads), `CLAUDE_REVIEW_WORKERS` (parallel reviews).
+- `BOOM_MONGO_URI`: BOOM MongoDB Claude reads, with a read-only user (e.g. `mongodb://readonly:...@localhost:27017/boom?authSource=boom` on the machine running BOOM).
+
+Claude runs headless (`claude --print`) in a background thread, with read-only tools only: `tools/fritz.py` (GET on the SkyPortal API), `tools/boom.py` (object summary, find, cone search, aggregations and cutouts on an allowlist of BOOM alert and catalog collections) and web search, with WebFetch on GCN, TNS, SIMBAD, VizieR, NED and the Minor Planet Center. The analysis method is in `prompts/claude_review.md`.
+
+People can ask questions in the Slack thread of a detection: every `CLAUDE_THREAD_POLL_INTERVAL` seconds the pipeline looks for messages without a reply in the threads of the analyses of the last 14 days, resumes the Claude session that wrote the analysis (kept in `reviews/`, with its tool results) and answers in the thread. If that session is gone, Claude starts a new one from the text of the analysis. To tune it on a past detection without posting on Slack:
+```bash
+python -m utils.claude_review ZTF26aaaaaaa 2026-09-28T00:31:17
+```
 
 The BOOM GCN schema and example JSON messages are available in the [GCN Schema project](https://github.com/nasa-gcn/gcn-schema/tree/main/gcn/notices/boom).
 
