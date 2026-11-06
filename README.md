@@ -22,9 +22,9 @@ This service contributes to the BOOM GCN Notices stream: it crossmatches candida
 - Keeps the recent alerts in memory and crossmatches them again when a new or updated skymap arrives.
 - Saves the published matches in `published_matches.json`, so that replaying the Kafka topic after a restart does not publish them again.
 - Ignores GW skymaps whose 90% area is above 5000 sq. deg.
-- For GW skymaps, compares the alert with the distance along its line of sight (host galaxy distance from the BOOM `host_galaxy` field, peak absolute magnitude) and adds it to the Slack message, without dropping any match.
+- For GW skymaps, compares the alert with the distance along its line of sight (host galaxy distance from the BOOM `host_galaxy` field, peak absolute magnitude) and adds it to the Slack thread of the detection, without dropping any match.
 - Consumes alerts from configured BOOM Kafka filters, filters photometry (SNR, detections / last non-detection), and checks spatial and temporal containment against each skymap.
-- For every match, produces a BOOM GCN Notice to GCN Kafka (test or production). A Slack summary with the payload JSON and a PNG of the object over each matching skymap MOC can optionally be sent.
+- For every match, produces a BOOM GCN Notice to GCN Kafka (test or production). A Slack message can optionally be sent: the object and event links, its detections and a PNG of the object over each matching skymap MOC, with the distance check and the payload JSON in its thread.
 - Emits periodic heartbeats on the `gcn.notices.boom.heartbeat` topic.
 
 A `display_skymaps(obj, skymaps, plot=False)` helper is also available in `utils/skymap.py` to log (and optionally plot with matplotlib) the skymaps that match a given object.

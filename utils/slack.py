@@ -3,12 +3,13 @@ import json
 import os
 import time
 import urllib.error
+from collections import Counter
 
 from dotenv import load_dotenv
 from slack_sdk import WebClient
 from slack_sdk.errors import SlackApiError
-from datetime import datetime, UTC
 
+from utils.converter import flux_to_mag, get_survey
 from utils.logger import log, RED, YELLOW, ENDC
 from utils.skymap import plot_object_on_skymap
 
@@ -16,6 +17,7 @@ load_dotenv()
 
 UPLOAD_ATTEMPTS = 3
 UPLOAD_RETRY_DELAY = 10  # seconds, doubled after each failed attempt
+SURVEY_NAMES = {"LSSTCam": "LSST"}
 
 
 def is_transient(error):
@@ -63,11 +65,12 @@ class SlackNotifier:
                 self.client.chat_delete(channel=self.channel_id, ts=message["ts"])
                 time.sleep(1.3)  # To avoid hitting rate limits
 
-    def _upload(self, content, **kwargs):
-        """files_upload_v2 in the channel, retried on transient errors."""
+    def _upload(self, files, **kwargs):
+        """files_upload_v2 of [(filename, bytes)] in the channel, retried on transient errors."""
         for attempt in range(1, UPLOAD_ATTEMPTS + 1):
+            uploads = [{"file": io.BytesIO(content), "filename": name, "title": name} for name, content in files]
             try:
-                return self.client.files_upload_v2(channel=self.channel_id, file=io.BytesIO(content), **kwargs)
+                return self.client.files_upload_v2(channel=self.channel_id, file_uploads=uploads, **kwargs)
             except Exception as e:
                 if attempt == UPLOAD_ATTEMPTS or not is_transient(e):
                     raise
@@ -75,30 +78,74 @@ class SlackNotifier:
                 log(f"{YELLOW}Slack upload failed ({e}), retrying in {delay} seconds{ENDC}")
                 time.sleep(delay)
 
-    def send(self, obj, matching_skymaps, gcn_payload, notes=None):
+    def _share_ts(self, response):
+        """Timestamp of the message that shares an upload in the channel, or None if Slack does not give it in time."""
+        file_id = response["files"][0]["id"]
+        for _ in range(10):
+            time.sleep(2)
+            shares = self.client.files_info(file=file_id)["file"].get("shares") or {}
+            for kind in ("public", "private"):
+                for share in shares.get(kind, {}).get(self.channel_id, []):
+                    return share["ts"]
+        return None
+
+    def post(self, text):
+        """Post a text message in the channel, return its timestamp."""
+        return self.client.chat_postMessage(channel=self.channel_id, text=text, unfurl_links=False)["ts"]
+
+    def header(self, obj, matching_skymaps):
+        """Object, matching events and a one line summary of the detections."""
+        events = ", ".join(
+            f"*<{self.skyportal_url}/gcn_events/{dateobs}|{skymap.alias}>* "
+            f"({skymap.type or 'event'} {dateobs[:16].replace('T', ' ')} UTC, first detection {first_detection_delay(obj, skymap)})"
+            for dateobs, skymap in matching_skymaps.items()
+        )
+        return f"*<{self.skyportal_url}/source/{obj['objectId']}|{obj['objectId']}>* in {events}\n{photometry_summary(obj)}"
+
+    def send(self, obj, matching_skymaps):
         """
-        Send a message to Slack with the object details, optional notes and crossmatch plots.
-        A plot that fails to upload is only logged, so that the detection already posted is not published again.
+        Post the detection with its skymap plots and return the timestamp of the message, None if Slack did not give it.
+        A plot that fails is only logged, so that the detection is posted without it rather than not at all.
         """
+        text = self.header(obj, matching_skymaps)
+        plots = []
+        for skymap in matching_skymaps.values():
+            try:
+                plots.append((f"{obj['objectId']}_{skymap.alias}.png", plot_object_on_skymap(obj, skymap).getvalue()))
+            except Exception as e:
+                log(f"{RED}Could not plot {obj['objectId']} on the {skymap.alias} skymap:{ENDC} {e}")
+        if plots:
+            try:
+                return self._share_ts(self._upload(plots, initial_comment=text))
+            except Exception as e:
+                log(f"{RED}Could not upload the skymap plots of {obj['objectId']} to Slack, its detection is posted without them:{ENDC} {e}")
+        return self.post(text)
+
+    def send_details(self, ts, obj, matching_skymaps, gcn_payload, notes=None):
+        """Distance checks and GCN notice payload in the thread of the detection message."""
         notes_text = "".join(f"*Distance:* {note}\n" for note in notes or [])
         self._upload(
-            json.dumps(gcn_payload, indent=2, ensure_ascii=False).encode("utf-8"),
-            initial_comment=(
-                f"*New object in Skymaps localization*\n"
-                f"*Date:* {datetime.now(UTC).replace(microsecond=0).isoformat()} UTC\n"
-                f"*Object:* <{self.skyportal_url}/source/{obj['objectId']}|{obj['objectId']}>\n"
-                f"{notes_text}"
-                f"*GCN notice payload:*"
-            ),
-            title=f"gcn_notice_payload_{obj['objectId']}_{'_'.join([skymap.alias for skymap in matching_skymaps.values()])}.json",
+            [(f"gcn_notice_payload_{obj['objectId']}_{'_'.join(skymap.alias for skymap in matching_skymaps.values())}.json",
+              json.dumps(gcn_payload, indent=2, ensure_ascii=False).encode("utf-8"))],
+            initial_comment=f"{notes_text}*GCN notice payload:*",
+            thread_ts=ts,
         )
 
-        for dateobs, skymap in matching_skymaps.items():
-            try:
-                self._upload(
-                    plot_object_on_skymap(obj, skymap).getvalue(),
-                    filename=f"{obj['objectId']}_{skymap.alias}.png",
-                    initial_comment=f"*Alias:* <{self.skyportal_url}/gcn_events/{dateobs}|{skymap.alias}>",
-                )
-            except Exception as e:
-                log(f"{RED}Could not upload the {skymap.alias} plot of {obj['objectId']} to Slack, its detection is posted without it:{ENDC} {e}")
+
+def first_detection_delay(obj, skymap):
+    """Time from the trigger to the first detection, e.g. "+2.6 d" or "+5 h"."""
+    days = next(phot["jd"] for phot in obj["filtered_photometry"] if phot["flux"] is not None) - skymap.jd
+    return f"+{days:.1f} d" if days >= 1 else f"+{days * 24:.0f} h"
+
+
+def photometry_summary(obj):
+    """Number of detections per survey and the last one, e.g. "3 detections, ZTF 2 + LSST 1, last r 19.31 (LSST)"."""
+    detections = [phot for phot in obj["filtered_photometry"] if phot["flux"] is not None]
+    surveys = Counter(SURVEY_NAMES.get(get_survey(obj, phot)["instrument"], get_survey(obj, phot)["instrument"]) for phot in detections)
+    split = next(iter(surveys)) + " only" if len(surveys) == 1 else " + ".join(f"{name} {n}" for name, n in surveys.items())
+    last = detections[-1]
+    last_survey = get_survey(obj, last)
+    mag = flux_to_mag(last["flux"], last_survey["zp"])
+    plural = "s" if len(detections) > 1 else ""
+    where = f" ({SURVEY_NAMES.get(last_survey['instrument'], last_survey['instrument'])})" if len(surveys) > 1 else ""
+    return f"{len(detections)} detection{plural}, {split}, last {last['band'].removeprefix('ztf')} {mag:.2f}{where}"
