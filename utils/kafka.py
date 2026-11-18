@@ -64,6 +64,18 @@ def boom_consumer(topics=None):
     }
 
     consumer = Consumer(boom_config)
-    consumer.subscribe(topics)
+    positions = {}
+
+    def keep_positions(consumer, partitions):
+        for partition in consumer.position(partitions):
+            if partition.offset >= 0:
+                positions[(partition.topic, partition.partition)] = partition.offset
+
+    def resume_at_positions(consumer, partitions):
+        for partition in partitions:
+            partition.offset = positions.get((partition.topic, partition.partition), partition.offset)
+        consumer.assign(partitions)
+
+    consumer.subscribe(topics, on_assign=resume_at_positions, on_revoke=keep_positions)
     log(f"Subscribed to topics: {topics}")
     return consumer
