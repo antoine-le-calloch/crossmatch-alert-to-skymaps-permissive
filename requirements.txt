@@ -4,6 +4,7 @@ cdshealpix
 requests
 python-dotenv
 numpy
+scipy
 slack_sdk
 astropy_healpix
 confluent_kafka
