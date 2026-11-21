@@ -11,17 +11,27 @@ from astropy_healpix import HEALPix
 from astropy.wcs import WCS
 from astropy.io import fits
 from astropy.visualization.wcsaxes.frame import EllipticalFrame
+from scipy.special import ndtr
 
 from utils.logger import log
 
 
+def radial_probability(distmu, distsigma, distance):
+    """Integral of r^2 N(r; distmu, distsigma) from -inf to distance."""
+    z = (distance - distmu) / distsigma
+    return (distmu**2 + distsigma**2) * ndtr(z) - distsigma * (distmu + distance) * np.exp(-0.5 * z**2) / np.sqrt(2 * np.pi)
+
+
 @dataclass
 class SkymapDistance:
-    """Per-pixel distance ansatz of a 3D GW skymap: p(r) is proportional to r^2 N(r; distmu, distsigma)."""
+    """Per-pixel distance ansatz of a 3D GW skymap: dP/dV = prob / pixel area * distnorm * N(r; distmu, distsigma)."""
     uniq: np.ndarray
+    prob: np.ndarray
     distmu: np.ndarray
     distsigma: np.ndarray
+    distnorm: np.ndarray
     _lookup: dict = field(init=False, repr=False)
+    _peak_density: np.ndarray = field(init=False, repr=False)
 
     def __post_init__(self):
         levels, ipix = uniq_to_level_ipix(self.uniq)
@@ -29,18 +39,45 @@ class SkymapDistance:
         for level in np.unique(levels):
             selected = np.nonzero(levels == level)[0]
             self._lookup[int(level)] = dict(zip(ipix[selected].tolist(), selected.tolist()))
+        valid = (
+            np.isfinite(self.distmu) & np.isfinite(self.distsigma) & (self.distsigma > 0)
+            & np.isfinite(self.distnorm) & (self.distnorm > 0) & (self.prob > 0)
+        )
+        pixel_area = np.pi / (3 * 4.0**levels)
+        self._peak_density = np.zeros(len(self.uniq))
+        self._peak_density[valid] = (
+            self.prob[valid] / pixel_area[valid] * self.distnorm[valid] / (np.sqrt(2 * np.pi) * self.distsigma[valid])
+        )
 
-    def at(self, ra, dec):
-        """Return (distmu, distsigma) in Mpc at the given position, or None outside the map."""
+    def _index(self, ra, dec):
         for level, pixels in self._lookup.items():
             ipix = HEALPix(nside=2**level, order="nested").lonlat_to_healpix(ra * u.deg, dec * u.deg)
             index = pixels.get(int(ipix))
             if index is not None:
-                mu, sigma = float(self.distmu[index]), float(self.distsigma[index])
-                if np.isfinite(mu) and np.isfinite(sigma) and sigma > 0:
-                    return mu, sigma
-                return None
+                return index
         return None
+
+    def at(self, ra, dec):
+        """Return (distmu, distsigma) in Mpc at the given position, or None outside the map."""
+        index = self._index(ra, dec)
+        if index is None or self._peak_density[index] <= 0:
+            return None
+        return float(self.distmu[index]), float(self.distsigma[index])
+
+    def credible_level(self, ra, dec, distance):
+        """3D credible level of a position at a distance in Mpc: the probability held by the denser voxels (lower is better)."""
+        index = self._index(ra, dec)
+        if index is None or self._peak_density[index] <= 0:
+            return None
+        density = self._peak_density[index] * np.exp(-0.5 * ((distance - self.distmu[index]) / self.distsigma[index]) ** 2)
+        if density <= 0:
+            return 1.0
+        denser = self._peak_density > density
+        distmu, distsigma = self.distmu[denser], self.distsigma[denser]
+        half_width = distsigma * np.sqrt(2 * np.log(self._peak_density[denser] / density))
+        low, high = np.maximum(distmu - half_width, 0), np.maximum(distmu + half_width, 0)
+        radial = radial_probability(distmu, distsigma, high) - radial_probability(distmu, distsigma, low)
+        return float(np.sum(self.prob[denser] * self.distnorm[denser] * radial))
 
 
 @dataclass
@@ -169,15 +206,15 @@ def read_skymap_probabilities(bytes_io):
     Returns
     -------
     tuple
-        The NESTED UNIQ indices, the probability of each pixel, and the DISTMU and
-        DISTSIGMA columns ({name: None} if the skymap has no distance).
+        The NESTED UNIQ indices, the probability of each pixel, and the DISTMU,
+        DISTSIGMA and DISTNORM columns ({name: None} if the skymap has no distance).
     """
     with fits.open(bytes_io) as hdul:
         data = hdul[1].data
         columns = [col.name for col in hdul[1].columns]
         header = hdul[1].header
 
-    distance_columns = {name: None for name in ("DISTMU", "DISTSIGMA")}
+    distance_columns = {name: None for name in ("DISTMU", "DISTSIGMA", "DISTNORM")}
     if "UNIQ" in columns:
         uniq = np.asarray(data["UNIQ"], dtype=np.int64)
         prob = np.asarray(data["PROBDENSITY"]) * np.pi / (3 * 4.0**uniq_to_level_ipix(uniq)[0])
@@ -242,7 +279,13 @@ def read_skymap_fits(bytes_io, cumulative_probability):
 
     distance = None
     if all(values is not None for values in distance_columns.values()):
-        distance = SkymapDistance(uniq=uniq, distmu=distance_columns["DISTMU"], distsigma=distance_columns["DISTSIGMA"])
+        distance = SkymapDistance(
+            uniq=uniq,
+            prob=prob,
+            distmu=distance_columns["DISTMU"],
+            distsigma=distance_columns["DISTSIGMA"],
+            distnorm=distance_columns["DISTNORM"],
+        )
 
     moc = MOC.from_valued_healpix_cells(uniq, prob, 29, cumul_to=cumulative_probability)
     return moc, area_90, distance
